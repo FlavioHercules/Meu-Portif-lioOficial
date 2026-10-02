@@ -31,6 +31,7 @@ export default function Login() {
         email,
         password: senha,
         options: {
+          emailRedirectTo: window.location.origin,
           data: {
             full_name: nome,
           },
