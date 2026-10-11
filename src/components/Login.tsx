@@ -144,8 +144,10 @@ export default function Login() {
 
 const styles = {
   container: {
-    width: '100vw',
-    height: '100vh',
+    width: '100%',
+    minWidth: 0,
+    height: '100dvh',
+    padding: 'calc(env(safe-area-inset-top, 0px) + 16px) max(16px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 16px) max(16px, env(safe-area-inset-left, 0px))',
     backgroundColor: '#050508',
     backgroundImage: 'radial-gradient(circle at 50% 30%, rgba(0, 100, 200, 0.15) 0%, transparent 70%)',
     display: 'flex',
@@ -264,7 +266,6 @@ const styles = {
     letterSpacing: '0.05em',
     boxShadow: '0 4px 16px rgba(0, 224, 255, 0.3)',
     transition: 'opacity 0.2s ease',
-    cursor: 'pointer',
   },
   footer: {
     marginTop: '24px',

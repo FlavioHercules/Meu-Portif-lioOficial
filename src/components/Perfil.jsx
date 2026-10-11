@@ -1,21 +1,28 @@
 import React from 'react';
 import Navbar from './Navbar';
 
-export default function Perfil({ onOpenNotif, onOpenConfig }) {
+export default function Perfil({ userProfile = {}, onEditResearch, onSignOut, onOpenNotif, onOpenConfig }) {
+  const userName = userProfile.full_name || 'Usuário';
+  const pesquisa = userProfile.pesquisa;
+  const objective = pesquisa?.objective || 'Não informado';
+  const memberSince = userProfile.member_since
+    ? new Date(userProfile.member_since).toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' })
+    : 'Data não informada';
+
   return (
     <div style={styles.appContainer}>
       {/* 1. Navbar Superior */}
       <Navbar onOpenNotif={onOpenNotif} onOpenConfig={onOpenConfig} />
 
       {/* 2. Conteúdo do Dashboard (Layout em Grid idêntico à imagem) */}
-      <main style={styles.dashboardGrid}>
+      <main className="profile-dashboard" style={styles.dashboardGrid}>
         
         {/* ================= COLUNA ESQUERDA ================= */}
         <section style={styles.leftColumn}>
           
           {/* Banner Principal do Perfil */}
           <div style={styles.heroCard}>
-            <div style={styles.heroTopRow}>
+            <div className="profile-hero-row" style={styles.heroTopRow}>
               <div style={styles.avatarContainer}>
                 <div style={styles.avatarCircle}>
                   <span style={{ fontSize: '36px', color: '#00e0ff' }}>👤</span>
@@ -26,29 +33,30 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
               <div style={styles.heroUserInfo}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%' }}>
                   <div>
-                    <h1 style={styles.heroTitle}>Usuário</h1>
+                    <h1 style={styles.heroTitle}>{userName}</h1>
                     <p style={styles.heroSub}>
-                      📅 Membro desde 10 de março de 2025<br />
+                      📅 Membro desde {memberSince}<br />
                       Disciplina hoje, resultados amanhã.
                     </p>
                   </div>
-                  <button style={styles.editProfileBtn}>
+                  <button style={styles.editProfileBtn} onClick={onEditResearch}>
                     <span>✎</span> Editar perfil
                   </button>
                 </div>
 
                 <div style={styles.userBadgesRow}>
-                  <div style={styles.badgeItem}><span>👤</span> 18 anos</div>
-                  <div style={styles.badgeItem}><span>📏</span> 1,70 m</div>
-                  <div style={styles.badgeItem}><span>⚖️</span> 90 kg</div>
-                  <div style={styles.badgeItem}><span>🎯</span> Objetivo: Emagrecer</div>
+                  <div style={styles.badgeItem}><span>👤</span> {pesquisa?.gender || 'Sexo não informado'}</div>
+                  <div style={styles.badgeItem}><span>🎂</span> {pesquisa?.age ? `${pesquisa.age} anos` : 'Idade não informada'}</div>
+                  <div style={styles.badgeItem}><span>📏</span> {pesquisa?.height_cm ? `${pesquisa.height_cm} cm` : 'Altura não informada'}</div>
+                  <div style={styles.badgeItem}><span>⚖️</span> {pesquisa?.weight_kg ? `${pesquisa.weight_kg} kg` : 'Peso não informado'}</div>
+                  <div style={styles.badgeItem}><span>🎯</span> Objetivo: {objective}</div>
                 </div>
               </div>
             </div>
           </div>
 
           {/* Grid do Meio: Informações Pessoais & Evolução Física */}
-          <div style={styles.twoColumnGrid}>
+          <div className="profile-two-column-grid" style={styles.twoColumnGrid}>
             
             {/* Informações Pessoais */}
             <div style={styles.sectionCard}>
@@ -65,37 +73,63 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
                   <div style={styles.infoLabel}>
                     <span>👤</span> Nome
                   </div>
-                  <span style={styles.infoValue}>Usuário</span>
+                  <span style={styles.infoValue}>{userName}</span>
+                </div>
+                {userProfile.email && (
+                  <div style={styles.infoRow}>
+                    <div style={styles.infoLabel}>
+                      <span>✉️</span> E-mail
+                    </div>
+                    <span style={styles.infoValue}>{userProfile.email}</span>
+                  </div>
+                )}
+                <div style={styles.infoRow}>
+                  <div style={styles.infoLabel}>
+                    <span>👤</span> Sexo
+                  </div>
+                  <span style={styles.infoValue}>{pesquisa?.gender || 'Não informado'}</span>
                 </div>
                 <div style={styles.infoRow}>
                   <div style={styles.infoLabel}>
-                    <span>📅</span> Idade
+                    <span>🎂</span> Idade
                   </div>
-                  <span style={styles.infoValue}>18 anos</span>
+                  <span style={styles.infoValue}>{pesquisa?.age ? `${pesquisa.age} anos` : 'Não informado'}</span>
                 </div>
                 <div style={styles.infoRow}>
                   <div style={styles.infoLabel}>
                     <span>📏</span> Altura
                   </div>
-                  <span style={styles.infoValue}>1,70 m</span>
+                  <span style={styles.infoValue}>{pesquisa?.height_cm ? `${pesquisa.height_cm} cm` : 'Não informado'}</span>
                 </div>
                 <div style={styles.infoRow}>
                   <div style={styles.infoLabel}>
                     <span>⚖️️</span> Peso
                   </div>
-                  <span style={styles.infoValue}>90 kg</span>
+                  <span style={styles.infoValue}>{pesquisa?.weight_kg ? `${pesquisa.weight_kg} kg` : 'Não informado'}</span>
                 </div>
                 <div style={styles.infoRow}>
                   <div style={styles.infoLabel}>
                     <span>🎯</span> Objetivo
                   </div>
-                  <span style={styles.infoValue}>Emagrecer</span>
+                  <span style={styles.infoValue}>{objective}</span>
                 </div>
                 <div style={styles.infoRow}>
                   <div style={styles.infoLabel}>
                     <span>🏋️</span> Nível
                   </div>
-                  <span style={styles.infoValue}>Iniciante</span>
+                  <span style={styles.infoValue}>{pesquisa?.experience_level || 'Não informado'}</span>
+                </div>
+                <div style={styles.infoRow}>
+                  <div style={styles.infoLabel}>
+                    <span>📆</span> Experiência
+                  </div>
+                  <span style={styles.infoValue}>{pesquisa?.experience_months ? `${pesquisa.experience_months} meses` : 'Iniciante'}</span>
+                </div>
+                <div style={styles.infoRow}>
+                  <div style={styles.infoLabel}>
+                    <span>🩹</span> Limitações
+                  </div>
+                  <span style={styles.infoValue}>{pesquisa?.limitations?.length ? pesquisa.limitations.join(', ') : 'Nenhuma informada'}</span>
                 </div>
               </div>
             </div>
@@ -105,34 +139,23 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
               <div style={styles.sectionHeader}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: '14px' }}>📈</span>
-                  <span style={styles.sectionTitleText}>EVOLUÇÃO FÍSICA</span>
+                  <span style={styles.sectionTitleText}>MEDIDAS ATUAIS</span>
                 </div>
                 <span style={{ color: '#64748b', fontSize: '12px' }}>›</span>
               </div>
 
-              <div style={styles.chartContainer}>
-                {/* Linha simulada do gráfico */}
-                <svg style={styles.svgChart} viewBox="0 0 300 100">
-                  <defs>
-                    <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="rgba(0,224,255,0.4)" />
-                      <stop offset="100%" stopColor="rgba(0,224,255,0)" />
-                    </linearGradient>
-                  </defs>
-                  <path d="M 10 70 L 150 50 L 290 25" fill="none" stroke="#00e0ff" strokeWidth="2.5" />
-                  <circle cx="10" cy="70" r="4" fill="#00e0ff" />
-                  <circle cx="150" cy="50" r="4" fill="#00e0ff" />
-                  <circle cx="290" cy="25" r="4" fill="#00e0ff" />
-                </svg>
-
-                <div style={styles.chartAxisInfo}>
-                  <div>
-                    <div style={{ fontSize: '9px', color: '#64748b' }}>Início</div>
-                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#fff' }}>90 kg</div>
+              <div style={{ ...styles.chartContainer, height: '140px', flexDirection: 'row', alignItems: 'center', gap: '12px' }}>
+                <div style={{ flex: 1, textAlign: 'center' }}>
+                  <div style={{ fontSize: '9px', color: '#64748b' }}>ALTURA</div>
+                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#fff', marginTop: '6px' }}>
+                    {pesquisa?.height_cm ? `${pesquisa.height_cm} cm` : 'Não informado'}
                   </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '9px', color: '#64748b' }}>Atual</div>
-                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#fff' }}>90 kg</div>
+                </div>
+                <div style={{ width: '1px', height: '48px', backgroundColor: 'rgba(0, 100, 200, 0.2)' }} />
+                <div style={{ flex: 1, textAlign: 'center' }}>
+                  <div style={{ fontSize: '9px', color: '#64748b' }}>PESO</div>
+                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#fff', marginTop: '6px' }}>
+                    {pesquisa?.weight_kg ? `${pesquisa.weight_kg} kg` : 'Não informado'}
                   </div>
                 </div>
               </div>
@@ -141,7 +164,7 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
           </div>
 
           {/* Grid inferior esquerdo: Seu Objetivo & Preferências de Treino */}
-          <div style={styles.twoColumnGrid}>
+          <div className="profile-two-column-grid" style={styles.twoColumnGrid}>
             
             {/* Seu Objetivo */}
             <div style={styles.sectionCard}>
@@ -153,15 +176,17 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
                 <span style={{ fontSize: '20px' }}>🔥</span>
                 <div>
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#fff' }}>Emagrecer</div>
-                  <div style={{ fontSize: '10px', color: '#94a3b8' }}>Perder peso, ganhar saúde e mais disposição.</div>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#fff' }}>{objective}</div>
+                  <div style={{ fontSize: '10px', color: '#94a3b8' }}>Objetivo informado na pesquisa inicial.</div>
                 </div>
               </div>
 
               <div style={styles.progressBarBg}>
-                <div style={{ ...styles.progressBarFill, width: '0%' }} />
+                <div style={{ ...styles.progressBarFill, width: userProfile.progress_percent ? `${Math.min(100, Number(userProfile.progress_percent))}%` : '0%' }} />
               </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', fontSize: '10px', color: '#00e0ff', marginTop: '4px', fontWeight: 700 }}>0%</div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', fontSize: '10px', color: '#00e0ff', marginTop: '4px', fontWeight: 700 }}>
+                {userProfile.progress_percent ? `${Math.min(100, Number(userProfile.progress_percent))}%` : '0%'}
+              </div>
             </div>
 
             {/* Preferências de Treino */}
@@ -172,33 +197,32 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
               </div>
 
               <div style={styles.pillsRow}>
-                <span style={{ ...styles.prefPill, ...styles.prefPillActive }}>Musculação</span>
-                <span style={styles.prefPill}>Funcional</span>
-                <span style={styles.prefPill}>HIIT</span>
-                <span style={styles.prefPill}>Cardio</span>
-                <span style={styles.prefPill}>Core</span>
+                {(pesquisa?.training_preferences || []).map((preference) => (
+                  <span key={preference} style={{ ...styles.prefPill, ...styles.prefPillActive }}>{preference}</span>
+                ))}
+                {!pesquisa?.training_preferences?.length && <span style={styles.prefPill}>Não informado</span>}
               </div>
 
               <div style={styles.prefDetailsRow}>
                 <div style={styles.prefDetailItem}>
                   <span>📅</span>
                   <div>
-                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>3-5x</div>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>{pesquisa?.weekly_frequency || 'Não informado'}</div>
                     <div style={{ fontSize: '8px', color: '#64748b' }}>por semana</div>
                   </div>
                 </div>
                 <div style={styles.prefDetailItem}>
                   <span>⏱️</span>
                   <div>
-                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>45-60 min</div>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>{pesquisa?.available_time || 'Não informado'}</div>
                     <div style={{ fontSize: '8px', color: '#64748b' }}>por treino</div>
                   </div>
                 </div>
                 <div style={styles.prefDetailItem}>
                   <span>🏠</span>
                   <div>
-                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>Em casa</div>
-                    <div style={{ fontSize: '8px', color: '#64748b' }}>ou academia</div>
+                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>{pesquisa?.training_location || 'Não informado'}</div>
+                    <div style={{ fontSize: '8px', color: '#64748b' }}>local de treino</div>
                   </div>
                 </div>
               </div>
@@ -213,35 +237,17 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
                 <span style={{ fontSize: '14px' }}>🕒</span>
                 <span style={styles.sectionTitleText}>HISTÓRICO DE ATIVIDADES</span>
               </div>
-              <span style={{ color: '#00e0ff', fontSize: '11px', cursor: 'pointer' }}>Ver todo o histórico ›</span>
+              <span style={{ color: '#64748b', fontSize: '11px' }}>Sem dados ainda</span>
             </div>
 
-            <div style={styles.historyGrid}>
+            <div className="profile-history-grid" style={styles.historyGrid}>
               <div style={styles.historyCardItem}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '14px' }}>🏋️</span>
-                  <span style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>Treino realizado</span>
+                  <span style={{ fontSize: '14px' }}>📊</span>
+                  <span style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>Status</span>
                 </div>
-                <div style={{ fontSize: '11px', color: '#e2e8f0', fontWeight: 600 }}>Treino de Força - Superior</div>
-                <div style={{ fontSize: '9px', color: '#64748b', marginTop: '2px' }}>Hoje • 45 min</div>
-              </div>
-
-              <div style={styles.historyCardItem}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '14px' }}>📈</span>
-                  <span style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>Análise de movimento</span>
-                </div>
-                <div style={{ fontSize: '11px', color: '#e2e8f0', fontWeight: 600 }}>Postura e mobilidade</div>
-                <div style={{ fontSize: '9px', color: '#64748b', marginTop: '2px' }}>Ontem • 12 min</div>
-              </div>
-
-              <div style={styles.historyCardItem}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '14px' }}>💳</span>
-                  <span style={{ fontSize: '10px', fontWeight: 700, color: '#fff' }}>Plano atualizado</span>
-                </div>
-                <div style={{ fontSize: '11px', color: '#e2e8f0', fontWeight: 600 }}>Novo plano: Emagrecimento</div>
-                <div style={{ fontSize: '9px', color: '#64748b', marginTop: '2px' }}>Dia 12/04 • Premium</div>
+                <div style={{ fontSize: '11px', color: '#e2e8f0', fontWeight: 600 }}>Nenhuma atividade registrada</div>
+                <div style={{ fontSize: '9px', color: '#64748b', marginTop: '2px' }}>Os treinos concluídos aparecerão aqui.</div>
               </div>
             </div>
           </div>
@@ -261,33 +267,33 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '14px' }}>
               <div style={styles.progressCircle}>
-                <span style={{ fontSize: '16px', fontWeight: 900, color: '#00e0ff' }}>0%</span>
+                <span style={{ fontSize: '16px', fontWeight: 900, color: '#00e0ff' }}>{userProfile.progress_percent ? `${Math.min(100, Number(userProfile.progress_percent))}%` : '0%'}</span>
               </div>
               <div>
                 <div style={{ fontSize: '12px', fontWeight: 700, color: '#fff', marginBottom: '2px' }}>Evolução no seu ritmo</div>
-                <div style={{ fontSize: '10px', color: '#64748b', lineHeight: '1.3' }}>Cada treino te aproxima do seu objetivo.</div>
+                <div style={{ fontSize: '10px', color: '#64748b', lineHeight: '1.3' }}>Acompanhe os dados reais de treino quando houver registros salvos.</div>
               </div>
             </div>
 
             <div style={styles.progressStatsGrid}>
               <div style={styles.progStatBox}>
                 <span style={{ fontSize: '13px' }}>📋</span>
-                <div style={{ fontSize: '14px', fontWeight: 900, color: '#fff' }}>0</div>
+                <div style={{ fontSize: '14px', fontWeight: 900, color: '#fff' }}>{userProfile.completed_workouts ?? 0}</div>
                 <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center' }}>Treinos concluídos</div>
               </div>
               <div style={styles.progStatBox}>
                 <span style={{ fontSize: '13px' }}>📅</span>
-                <div style={{ fontSize: '14px', fontWeight: 900, color: '#fff' }}>0</div>
+                <div style={{ fontSize: '14px', fontWeight: 900, color: '#fff' }}>{userProfile.active_days ?? 0}</div>
                 <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center' }}>Dias ativos</div>
               </div>
               <div style={styles.progStatBox}>
                 <span style={{ fontSize: '13px' }}>⏱️</span>
-                <div style={{ fontSize: '14px', fontWeight: 900, color: '#fff' }}>0h 0min</div>
+                <div style={{ fontSize: '14px', fontWeight: 900, color: '#fff' }}>{userProfile.total_minutes ? `${userProfile.total_minutes} min` : '0 min'}</div>
                 <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center' }}>Tempo total de treino</div>
               </div>
               <div style={styles.progStatBox}>
                 <span style={{ fontSize: '13px' }}>🔥</span>
-                <div style={{ fontSize: '14px', fontWeight: 900, color: '#fff' }}>0 kcal</div>
+                <div style={{ fontSize: '14px', fontWeight: 900, color: '#fff' }}>{userProfile.calories_burned ?? 0}</div>
                 <div style={{ fontSize: '9px', color: '#64748b', textAlign: 'center' }}>Calorias queimadas</div>
               </div>
             </div>
@@ -305,16 +311,18 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
               <span style={{ fontSize: '14px' }}>👑</span>
-              <span style={{ fontSize: '12px', fontWeight: 900, color: '#fff' }}>Plano Premium</span>
-              <span style={{ fontSize: '8px', fontWeight: 800, backgroundColor: 'rgba(0,224,255,0.15)', color: '#00e0ff', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(0,224,255,0.3)' }}>ATIVO</span>
+              <span style={{ fontSize: '12px', fontWeight: 900, color: '#fff' }}>{userProfile.plan_name || 'Plano não informado'}</span>
+              <span style={{ fontSize: '8px', fontWeight: 800, backgroundColor: 'rgba(0,224,255,0.15)', color: '#00e0ff', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(0,224,255,0.3)' }}>
+                {userProfile.plan_status || 'NÃO DEFINIDO'}
+              </span>
             </div>
 
             <p style={{ fontSize: '10px', color: '#94a3b8', margin: '0 0 12px 0' }}>
-              Acesso completo a todas as funcionalidades.
+              {userProfile.plan_description || 'Acesse a página de planos para visualizar as opções disponíveis.'}
             </p>
 
             <button style={styles.sidePlanButton}>
-              <span>Ver detalhes</span>
+              <span>Ver planos</span>
               <span>→</span>
             </button>
           </div>
@@ -327,13 +335,13 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
             </div>
 
             <div style={styles.configList}>
-              <div style={styles.configItem}>
+              <button type="button" onClick={onOpenNotif} style={{ ...styles.configItem, width: '100%', borderTop: 0, borderLeft: 0, borderRight: 0, backgroundColor: 'transparent', textAlign: 'left' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span>🔔</span>
                   <span style={{ fontSize: '11px', color: '#fff', fontWeight: 600 }}>Notificações</span>
                 </div>
                 <span style={{ color: '#64748b', fontSize: '12px' }}>›</span>
-              </div>
+              </button>
 
               <div style={styles.configItem}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -351,13 +359,13 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
                 <span style={{ color: '#64748b', fontSize: '12px' }}>›</span>
               </div>
 
-              <div style={{ ...styles.configItem, borderBottom: 'none', marginBottom: 0 }}>
+              <button type="button" onClick={onSignOut} style={{ ...styles.configItem, width: '100%', borderBottom: 'none', marginBottom: 0, borderTop: 0, borderLeft: 0, borderRight: 0, backgroundColor: 'transparent', textAlign: 'left' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span>🚪</span>
                   <span style={{ fontSize: '11px', color: '#ff4d4d', fontWeight: 600 }}>Sair da conta</span>
                 </div>
                 <span style={{ color: '#64748b', fontSize: '12px' }}>›</span>
-              </div>
+              </button>
             </div>
           </div>
 
@@ -370,8 +378,9 @@ export default function Perfil({ onOpenNotif, onOpenConfig }) {
 
 const styles = {
   appContainer: {
-    width: '100vw',
-    minHeight: '100vh',
+    width: '100%',
+    minWidth: 0,
+    minHeight: '100dvh',
     backgroundColor: '#050508',
     color: '#ffffff',
     fontFamily: 'system-ui, -apple-system, sans-serif',
@@ -380,7 +389,7 @@ const styles = {
   },
   dashboardGrid: {
     display: 'grid',
-    gridTemplateColumns: '1fr 340px',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 340px)',
     gap: '20px',
     padding: '24px',
     maxWidth: '1450px',

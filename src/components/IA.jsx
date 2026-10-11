@@ -1,12 +1,295 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import Navbar from './Navbar';
+import ArtemisChat from './ArtemisChat';
+import { askArtemis } from '../services/artemisApi';
+import { findExerciseByName, loadAiWorkout, readAiWorkout, saveAiWorkout } from '../services/aiWorkoutStorage';
+import { supabase } from '../lib/supabase';
 
-export default function IA({ onOpenNotif, onOpenConfig }) {
-  const [goal, setGoal] = useState('');
-  const [level, setLevel] = useState('');
-  const [time, setTime] = useState('');
-  const [frequency, setFrequency] = useState('');
-  const [equipment, setEquipment] = useState('');
+const trainingOptions = ['Musculação', 'Funcional', 'HIIT', 'Cardio', 'Mobilidade', 'Esportes'];
+const weekDays = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+const exerciseCatalogFields = 'id, name, category, muscle_group, equipment, difficulty, modality, objectives, muscles, movement_pattern, unilateral, impact_level, description';
+
+function sessionsPerWeek(frequency = '') {
+  const match = String(frequency).match(/^(\d+)/);
+  return match ? Number(match[1]) : 0;
+}
+
+function defaultSchedule(count) {
+  const schedules = { 1: [2], 2: [0, 3], 3: [0, 2, 4], 4: [0, 1, 3, 5], 5: [0, 1, 2, 4, 5], 6: [0, 1, 2, 3, 4, 5], 7: [0, 1, 2, 3, 4, 5, 6] };
+  return schedules[count] || [];
+}
+
+function parseWorkoutPlan(response) {
+  const jsonText = response.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  const plan = JSON.parse(jsonText);
+  if (!Array.isArray(plan.days) || !plan.days.length) throw new Error('A Artemis não organizou os treinos por dia. Gere novamente.');
+  for (const day of plan.days) {
+    if (!day.title || !Array.isArray(day.exercises) || !day.exercises.length) {
+      throw new Error('A resposta da Artemis veio sem exercícios organizados. Gere novamente.');
+    }
+  }
+  return plan;
+}
+
+function formatWorkoutPlan(plan) {
+  return plan.days.map((day) => [
+    `${day.weekday}: ${day.title}`,
+    ...day.exercises.map((exercise) => `- ${exercise.name}: ${exercise.sets} séries, ${exercise.reps} repetições, ${exercise.rest_seconds}s de descanso`),
+  ].join('\n')).join('\n\n');
+}
+
+function mondayOf(date) {
+  const monday = new Date(date);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  return monday;
+}
+
+function toDateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, onOpenConfig }) {
+  const [preferences, setPreferences] = useState(() => ({
+    objective: pesquisa?.objective || '',
+    training_preferences: pesquisa?.training_preferences || [],
+    experience_level: pesquisa?.experience_level || '',
+    weekly_frequency: pesquisa?.weekly_frequency || '',
+    available_time: pesquisa?.available_time || '',
+    training_location: pesquisa?.training_location || '',
+    equipment: pesquisa?.equipment || 'Academia completa',
+  }));
+  const [workout, setWorkout] = useState(() => readAiWorkout(userId)?.content || '');
+  const [workoutError, setWorkoutError] = useState('');
+  const [workoutSaveError, setWorkoutSaveError] = useState('');
+  const [preferencesError, setPreferencesError] = useState('');
+  const [isSavingPreferences, setIsSavingPreferences] = useState(false);
+  const [isGeneratingWorkout, setIsGeneratingWorkout] = useState(false);
+  const [exerciseCatalog, setExerciseCatalog] = useState([]);
+  const [selectedTrainingDays, setSelectedTrainingDays] = useState(() => defaultSchedule(sessionsPerWeek(pesquisa?.weekly_frequency)));
+
+  useEffect(() => {
+    let isActive = true;
+
+    supabase
+      .from('exercises')
+      .select(exerciseCatalogFields)
+      .order('name')
+      .then(({ data, error }) => {
+        if (!isActive) return;
+        if (error) {
+          setWorkoutError('Não foi possível carregar o catálogo de exercícios da MotionFit. Confira a conexão e as permissões da tabela exercises.');
+          return;
+        }
+        setExerciseCatalog(data || []);
+      });
+
+    loadAiWorkout(userId)
+      .then((savedWorkout) => {
+        if (isActive && savedWorkout) setWorkout(savedWorkout.content);
+      })
+      .catch(() => {
+        if (isActive) setWorkoutSaveError('Não foi possível sincronizar seu treino salvo. Confira a migração do Supabase.');
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [userId]);
+
+  const updatePreference = (field, value) => {
+    setPreferences((current) => ({ ...current, [field]: value }));
+    if (field === 'weekly_frequency') setSelectedTrainingDays(defaultSchedule(sessionsPerWeek(value)));
+    setPreferencesError('');
+  };
+
+  const persistPreferences = async () => {
+    setPreferencesError('');
+    if (!preferences.objective || !preferences.experience_level || !preferences.weekly_frequency || !preferences.available_time || !preferences.training_location || !preferences.equipment) {
+      setPreferencesError('Preencha as preferências obrigatórias antes de salvar.');
+      return null;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('pesquisa')
+        .upsert({
+          ...pesquisa,
+          user_id: userId,
+          objective: preferences.objective,
+          training_preferences: preferences.training_preferences,
+          experience_level: preferences.experience_level,
+          weekly_frequency: preferences.weekly_frequency,
+          available_time: preferences.available_time,
+          training_location: preferences.training_location,
+          equipment: preferences.equipment,
+        }, { onConflict: 'user_id' })
+        .select()
+        .single();
+
+      if (error) {
+        setPreferencesError('Não foi possível salvar as preferências. Tente novamente.');
+        return null;
+      }
+
+      onPesquisaChange(data);
+      return data;
+    } catch {
+      setPreferencesError('Não foi possível salvar as preferências. Tente novamente.');
+      return null;
+    }
+  };
+
+  const handleSavePreferences = async () => {
+    setIsSavingPreferences(true);
+    try {
+      await persistPreferences();
+    } finally {
+      setIsSavingPreferences(false);
+    }
+  };
+
+  const handleGenerateWorkout = async () => {
+    const sessionCount = sessionsPerWeek(preferences.weekly_frequency);
+    if (selectedTrainingDays.length !== sessionCount) {
+      setWorkoutError(`Selecione ${sessionCount} ${sessionCount === 1 ? 'dia' : 'dias'} para sua frequência semanal.`);
+      return;
+    }
+    const savedPreferences = await persistPreferences();
+    if (!savedPreferences) {
+      return;
+    }
+
+    let catalog = exerciseCatalog;
+    if (!catalog.length) {
+      const { data, error } = await supabase.from('exercises').select(exerciseCatalogFields).order('name');
+      if (error) {
+        setWorkoutError('Não foi possível carregar o catálogo de exercícios. Tente novamente.');
+        return;
+      }
+      catalog = data || [];
+      setExerciseCatalog(catalog);
+    }
+    if (!catalog.length) {
+      setWorkoutError('Não há exercícios cadastrados no catálogo para montar o treino.');
+      return;
+    }
+
+    setWorkoutError('');
+    setIsGeneratingWorkout(true);
+
+    try {
+      const catalogForPrompt = catalog.map((exercise) => ({
+        id: exercise.id,
+        nome: exercise.name,
+        categoria: exercise.category,
+        grupo_muscular: exercise.muscle_group,
+        equipamento: exercise.equipment,
+        dificuldade: exercise.difficulty,
+        modalidade: exercise.modality,
+        objetivos: exercise.objectives,
+        musculos: exercise.muscles,
+        padrao_movimento: exercise.movement_pattern,
+        unilateral: exercise.unilateral,
+        impacto: exercise.impact_level,
+      }));
+      const exampleExercise = catalogForPrompt[0];
+      const prompt = [
+        'Crie um treino personalizado e prático com base nestes dados:',
+        `Objetivo: ${preferences.objective}`,
+        `Tipos de treino: ${preferences.training_preferences.join(', ') || 'sem preferência específica'}`,
+        `Experiência: ${preferences.experience_level}`,
+        `Tempo por sessão: ${preferences.available_time}`,
+        `Frequência: ${preferences.weekly_frequency}`,
+        `Local: ${preferences.training_location}`,
+        `Equipamentos: ${preferences.equipment}`,
+        `Dias escolhidos: ${[...selectedTrainingDays].sort((a, b) => a - b).map((index) => weekDays[index]).join(', ')}.`,
+        `Catálogo real da tabela exercises da MotionFit. Cada opção é um registro cadastrado: ${JSON.stringify(catalogForPrompt)}`,
+        'Use exclusivamente exercícios presentes no catálogo. Não invente exercícios, IDs ou nomes. Copie o id do registro para exercise_id e o nome correspondente para name.',
+        `Exemplo de exercício válido: ${JSON.stringify({ exercise_id: exampleExercise.id, name: exampleExercise.nome, sets: 3, reps: '8-12', rest_seconds: 60 })}.`,
+        `Responda somente com JSON válido neste formato: {"days":[{"weekday":"Seg","title":"Nome do treino","duration_min":45,"exercises":[{"exercise_id":"UUID real listado no catálogo","name":"Nome exato listado no catálogo","sets":3,"reps":"8-12","rest_seconds":60}]}]}. Inclua exatamente um objeto para cada dia escolhido, mantenha os nomes dos dias exatamente como informados, e inclua pelo menos 3 exercícios em cada dia. Não use markdown nem texto fora do JSON.`,
+      ].join('\n');
+      const response = await askArtemis(prompt, [], { responseFormat: 'json' });
+      const plan = parseWorkoutPlan(response);
+      const linkedPlan = {
+        ...plan,
+        days: plan.days.map((day) => ({
+          ...day,
+          exercises: day.exercises.map((exercise) => {
+            const catalogExercise = catalog.find((item) => item.id === exercise.exercise_id)
+              || findExerciseByName(exercise.name, catalog);
+            if (!catalogExercise) {
+              throw new Error(`A Artemis retornou "${exercise.name || 'um exercício'}", que não está no catálogo da MotionFit. Gere o treino novamente.`);
+            }
+            return {
+              ...exercise,
+              name: catalogExercise.name,
+              exercise_id: catalogExercise.id,
+            };
+          }),
+        })),
+      };
+      const workoutText = formatWorkoutPlan(linkedPlan);
+      setWorkout(workoutText);
+      setWorkoutSaveError('');
+      try {
+        await saveAiWorkout(userId, { content: workoutText, createdAt: new Date().toISOString() });
+        const monday = mondayOf(new Date());
+        const requestedDays = [...selectedTrainingDays].sort((first, second) => first - second);
+        const sessionsToInsert = requestedDays.map((dayIndex, index) => {
+          const day = linkedPlan.days[index];
+          const scheduledDate = new Date(monday);
+          scheduledDate.setDate(scheduledDate.getDate() + dayIndex);
+          return {
+            user_id: userId,
+            status: 'planned',
+            scheduled_for: toDateKey(scheduledDate),
+            workout_title: day.title,
+            duration_min: Number(day.duration_min) || 45,
+            plan_inputs: {
+              source: 'artemis',
+              training_day: weekDays[dayIndex],
+              objective: preferences.objective,
+              exercise_plan: day.exercises.map((exercise) => ({
+                exercise_id: exercise.exercise_id,
+                name: String(exercise.name),
+                sets: Number(exercise.sets) || 3,
+                reps: String(exercise.reps || '8-12'),
+                rest_seconds: Number(exercise.rest_seconds) || 60,
+              })),
+            },
+          };
+        });
+        if (plan.days.length !== requestedDays.length || plan.days.some((day, index) => day.weekday !== weekDays[requestedDays[index]])) {
+          throw new Error('Os dias retornados pela Artemis não correspondem aos selecionados. Gere novamente.');
+        }
+        const mondayKey = toDateKey(monday);
+        const sunday = new Date(monday);
+        sunday.setDate(sunday.getDate() + 6);
+        const { error: deleteError } = await supabase
+          .from('workout_sessions')
+          .delete()
+          .eq('user_id', userId)
+          .eq('status', 'planned')
+          .contains('plan_inputs', { source: 'artemis' })
+          .gte('scheduled_for', mondayKey)
+          .lte('scheduled_for', toDateKey(sunday));
+        if (deleteError) throw deleteError;
+        const { error: insertError } = await supabase.from('workout_sessions').insert(sessionsToInsert);
+        if (insertError) throw insertError;
+      } catch {
+        setWorkoutSaveError('O treino foi gerado, mas não foi possível salvá-lo na agenda. Confira as políticas e a migração de sessões do Supabase.');
+      }
+    } catch (error) {
+      setWorkoutError(error.message || 'Não foi possível gerar o treino. Tente novamente.');
+    } finally {
+      setIsGeneratingWorkout(false);
+    }
+  };
 
   return (
     <div style={styles.appContainer}>
@@ -14,13 +297,13 @@ export default function IA({ onOpenNotif, onOpenConfig }) {
       <Navbar onOpenNotif={onOpenNotif} onOpenConfig={onOpenConfig} />
 
       {/* 2. Conteúdo do Dashboard (Layout em Grid idêntico à imagem) */}
-      <main style={styles.dashboardGrid}>
+      <main className="ia-dashboard" style={styles.dashboardGrid}>
         
         {/* ================= COLUNA ESQUERDA ================= */}
         <section style={styles.leftColumn}>
           
           {/* Banner Principal: SEU TREINO, INTELIGÊNCIA ARTIFICIAL */}
-          <div style={styles.heroCard}>
+          <div className="ia-hero" style={styles.heroCard}>
             <div style={styles.heroContent}>
               <span style={styles.heroTag}>— TREINO IA</span>
               <h1 style={styles.heroTitle}>
@@ -74,28 +357,32 @@ export default function IA({ onOpenNotif, onOpenConfig }) {
             </div>
           </div>
 
+          <ArtemisChat userId={userId} exerciseCatalog={exerciseCatalog} />
+
           {/* Passo 1: Informe seus dados (Selects em linha) */}
           <div style={styles.sectionCard}>
             <div style={styles.stepHeader}>
               <span style={styles.stepNumber}>1</span>
-              <span style={styles.stepTitleText}>INFORME SEUS DADOS</span>
+              <span style={styles.stepTitleText}>PREFERÊNCIAS PARA SEU TREINO</span>
             </div>
 
-            <div style={styles.inputsGrid}>
+            <div className="ia-inputs-grid" style={styles.inputsGrid}>
               <div>
                 <label style={styles.inputLabel}>Objetivo</label>
-                <select value={goal} onChange={(e) => setGoal(e.target.value)} style={styles.selectInput}>
+                <select value={preferences.objective} onChange={(event) => updatePreference('objective', event.target.value)} style={styles.selectInput}>
                   <option value="">Selecione seu objetivo</option>
-                  <option>Emagrecer e secar</option>
+                  <option>Emagrecer</option>
                   <option>Ganhar massa muscular</option>
-                  <option>Definição corporal</option>
-                  <option>Performance e força</option>
+                  <option>Melhorar o condicionamento</option>
+                  <option>Aumentar força</option>
+                  <option>Ter mais saúde e disposição</option>
+                  <option>Manter a forma</option>
                 </select>
               </div>
 
               <div>
                 <label style={styles.inputLabel}>Nível de experiência</label>
-                <select value={level} onChange={(e) => setLevel(e.target.value)} style={styles.selectInput}>
+                <select value={preferences.experience_level} onChange={(event) => updatePreference('experience_level', event.target.value)} style={styles.selectInput}>
                   <option value="">Selecione seu nível</option>
                   <option>Iniciante</option>
                   <option>Intermediário</option>
@@ -105,34 +392,84 @@ export default function IA({ onOpenNotif, onOpenConfig }) {
 
               <div>
                 <label style={styles.inputLabel}>Tempo disponível</label>
-                <select value={time} onChange={(e) => setTime(e.target.value)} style={styles.selectInput}>
+                <select value={preferences.available_time} onChange={(event) => updatePreference('available_time', event.target.value)} style={styles.selectInput}>
                   <option value="">Selecione o tempo</option>
-                  <option>30 min</option>
-                  <option>45 min</option>
-                  <option>60 min</option>
+                  <option>Até 30 minutos</option>
+                  <option>30-60 minutos</option>
+                  <option>Mais de 60 minutos</option>
                 </select>
               </div>
 
               <div>
                 <label style={styles.inputLabel}>Frequência semanal</label>
-                <select value={frequency} onChange={(e) => setFrequency(e.target.value)} style={styles.selectInput}>
+                <select value={preferences.weekly_frequency} onChange={(event) => updatePreference('weekly_frequency', event.target.value)} style={styles.selectInput}>
                   <option value="">Selecione a frequência</option>
-                  <option>3x por semana</option>
-                  <option>4x por semana</option>
-                  <option>5x por semana</option>
+                  <option>1 vez por semana</option>
+                  <option>2 vezes por semana</option>
+                  <option>3 vezes por semana</option>
+                  <option>4 vezes por semana</option>
+                  <option>5 vezes por semana</option>
+                  <option>6 vezes por semana</option>
+                  <option>7 vezes por semana</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={styles.inputLabel}>Local de treino</label>
+                <select value={preferences.training_location} onChange={(event) => updatePreference('training_location', event.target.value)} style={styles.selectInput}>
+                  <option value="">Selecione o local</option>
+                  <option>Em casa</option>
+                  <option>Na academia</option>
+                  <option>Ao ar livre</option>
+                  <option>Em casa e na academia</option>
                 </select>
               </div>
 
               <div>
                 <label style={styles.inputLabel}>Equipamentos</label>
-                <select value={equipment} onChange={(e) => setEquipment(e.target.value)} style={styles.selectInput}>
+                <select value={preferences.equipment} onChange={(event) => updatePreference('equipment', event.target.value)} style={styles.selectInput}>
                   <option value="">Selecione os equipamentos</option>
                   <option>Academia completa</option>
-                  <option>Peso corporal (Calistenia)</option>
                   <option>Halteres em casa</option>
+                  <option>Peso corporal</option>
+                  <option>Elásticos</option>
+                  <option>Sem equipamento</option>
                 </select>
               </div>
             </div>
+
+            <fieldset style={styles.trainingPreferences}>
+              <legend style={styles.inputLabel}>Tipos de treino que você procura</legend>
+              <div className="ia-training-options">
+                {trainingOptions.map((training) => (
+                  <label key={training} style={styles.trainingOption}>
+                    <input
+                      type="checkbox"
+                      checked={preferences.training_preferences.includes(training)}
+                      onChange={() => updatePreference('training_preferences', preferences.training_preferences.includes(training)
+                        ? preferences.training_preferences.filter((item) => item !== training)
+                        : [...preferences.training_preferences, training])}
+                    />
+                    {training}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            <fieldset style={styles.trainingPreferences}>
+              <legend style={styles.inputLabel}>Dias da agenda ({selectedTrainingDays.length}/{sessionsPerWeek(preferences.weekly_frequency) || 0})</legend>
+              <div className="ia-training-options">
+                {weekDays.map((day, index) => {
+                  const isSelected = selectedTrainingDays.includes(index);
+                  return <button key={day} type="button" aria-pressed={isSelected} onClick={() => setSelectedTrainingDays((current) => isSelected ? current.filter((item) => item !== index) : [...current, index].sort((first, second) => first - second))} style={{ ...styles.optionPill, ...(isSelected ? styles.optionPillActive : {}) }}>{day}</button>;
+                })}
+              </div>
+            </fieldset>
+
+            {preferencesError && <p role="alert" style={{ color: '#fca5a5', fontSize: '13px' }}>{preferencesError}</p>}
+            <button type="button" onClick={handleSavePreferences} disabled={isSavingPreferences || isGeneratingWorkout} style={styles.savePreferencesButton}>
+              {isSavingPreferences ? 'Salvando...' : 'Salvar preferências'}
+            </button>
           </div>
 
           {/* Passo 2: Gerar meu treino */}
@@ -142,12 +479,18 @@ export default function IA({ onOpenNotif, onOpenConfig }) {
               <span style={styles.stepTitleText}>GERAR MEU TREINO</span>
             </div>
 
-            <div style={styles.generateRow}>
-              <button style={styles.generateButton}>
+            <div className="ia-generate-row" style={styles.generateRow}>
+              <button
+                type="button"
+                style={styles.generateButton}
+                onClick={handleGenerateWorkout}
+                disabled={isGeneratingWorkout || isSavingPreferences}
+                aria-busy={isGeneratingWorkout}
+              >
                 <svg style={{ width: '18px', height: '18px' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
-                <span>Gerar treino com IA</span>
+                <span>{isGeneratingWorkout ? 'Gerando treino...' : 'Gerar treino com IA'}</span>
                 <span style={{ marginLeft: 'auto' }}>→</span>
               </button>
 
@@ -158,6 +501,8 @@ export default function IA({ onOpenNotif, onOpenConfig }) {
                 </span>
               </div>
             </div>
+            {workoutError && <p role="alert" style={{ color: '#fca5a5', fontSize: '11px', marginBottom: 0 }}>{workoutError}</p>}
+            {workoutSaveError && <p role="alert" style={{ color: '#fca5a5', fontSize: '13px', marginBottom: 0 }}>{workoutSaveError}</p>}
           </div>
 
           {/* Passo 3: Seu treino está pronto! */}
@@ -167,7 +512,7 @@ export default function IA({ onOpenNotif, onOpenConfig }) {
               <span style={styles.stepTitleText}>SEU TREINO ESTÁ PRONTO!</span>
             </div>
 
-            <div style={styles.readyCardContent}>
+            <div className="ia-ready-content" style={styles.readyCardContent}>
               <div style={styles.readyImageBox}>
                 <div style={styles.cornerTL} />
                 <div style={styles.cornerTR} />
@@ -183,13 +528,22 @@ export default function IA({ onOpenNotif, onOpenConfig }) {
                   <span style={{ fontSize: '16px' }}>🤖</span>
                   <span style={{ fontSize: '12px', fontWeight: 800, color: '#fff' }}>TREINO PERSONALIZADO</span>
                 </div>
-                <p style={{ fontSize: '11px', color: '#94a3b8', lineHeight: '1.4', margin: '0 0 14px 0' }}>
-                  Aqui você verá seu treino completo,<br />com exercícios, séries, repetições e descanso.
+                <p style={{ fontFamily: '"Segoe UI", "Noto Sans", sans-serif', fontSize: '16px', color: '#dbe4f0', lineHeight: '1.7', margin: '0 0 14px 0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                  {workout ? workout.split('\n').map((line, index, lines) => {
+                    const exerciseLine = line.match(/^-\s+(.+?):\s(.*)$/);
+                    const exercise = exerciseLine && findExerciseByName(exerciseLine[1], exerciseCatalog);
+                    return (
+                      <React.Fragment key={`${index}-${line}`}>
+                        {exerciseLine ? (
+                          <>
+                            - {exercise ? <Link to={`/movimentos?exercise=${encodeURIComponent(exercise.id)}`} style={{ color: '#00e0ff', textDecoration: 'underline', textUnderlineOffset: '3px' }}>{exerciseLine[1]}</Link> : exerciseLine[1]}: {exerciseLine[2]}
+                          </>
+                        ) : line}
+                        {index < lines.length - 1 && <br />}
+                      </React.Fragment>
+                    );
+                  }) : 'Preencha seus dados e gere um treino personalizado com a Artemis.'}
                 </p>
-                <button style={styles.secondaryButton}>
-                  <span>Ver meu treino</span>
-                  <span>→</span>
-                </button>
               </div>
             </div>
           </div>
@@ -305,8 +659,9 @@ export default function IA({ onOpenNotif, onOpenConfig }) {
 
 const styles = {
   appContainer: {
-    width: '100vw',
-    minHeight: '100vh',
+    width: '100%',
+    minWidth: 0,
+    minHeight: '100dvh',
     backgroundColor: '#050508',
     color: '#ffffff',
     fontFamily: 'system-ui, -apple-system, sans-serif',
@@ -315,7 +670,7 @@ const styles = {
   },
   dashboardGrid: {
     display: 'grid',
-    gridTemplateColumns: '1fr 340px',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 340px)',
     gap: '20px',
     padding: '24px',
     maxWidth: '1450px',
@@ -373,6 +728,7 @@ const styles = {
   },
   heroFeatures: {
     display: 'flex',
+    flexWrap: 'wrap',
     gap: '8px'
   },
   featureBadge: {
@@ -451,12 +807,12 @@ const styles = {
   },
   inputsGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(5, 1fr)',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
     gap: '10px'
   },
   inputLabel: {
     display: 'block',
-    fontSize: '10px',
+    fontSize: '12px',
     color: '#94a3b8',
     marginBottom: '6px',
     fontWeight: 600
@@ -468,12 +824,42 @@ const styles = {
     borderRadius: '8px',
     padding: '9px 10px',
     color: '#fff',
-    fontSize: '11px',
+    fontSize: '14px',
     outline: 'none',
     cursor: 'pointer'
   },
+  trainingPreferences: {
+    margin: '18px 0 0',
+    padding: 0,
+    border: 0,
+  },
+  trainingOption: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '9px',
+    minHeight: '42px',
+    padding: '9px 12px',
+    border: '1px solid rgba(148, 163, 184, 0.2)',
+    borderRadius: '8px',
+    backgroundColor: '#0b0e1b',
+    color: '#e2e8f0',
+    fontSize: '14px',
+    cursor: 'pointer',
+  },
+  savePreferencesButton: {
+    marginTop: '16px',
+    border: 0,
+    borderRadius: '8px',
+    padding: '11px 16px',
+    backgroundColor: '#67e8f9',
+    color: '#082f36',
+    fontSize: '14px',
+    fontWeight: 700,
+    cursor: 'pointer',
+  },
   generateRow: {
     display: 'flex',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: '20px'
   },

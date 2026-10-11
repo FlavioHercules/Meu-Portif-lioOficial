@@ -1,0 +1,234 @@
+.artemis-chat {
+  width: 100%;
+  min-width: 0;
+  padding: 20px 24px;
+  border: 1px solid rgba(0, 162, 255, 0.2);
+  border-radius: 16px;
+  background: #070913;
+  color: #fff;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+.artemis-chat__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(0, 162, 255, 0.16);
+}
+
+.artemis-chat__eyebrow {
+  display: block;
+  margin-bottom: 5px;
+  color: #00e0ff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.artemis-chat__title {
+  margin: 0;
+  color: inherit;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.artemis-chat__status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.artemis-chat__status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #35d49a;
+  box-shadow: 0 0 8px rgba(53, 212, 154, 0.65);
+}
+
+.artemis-chat__messages {
+  display: flex;
+  min-height: 150px;
+  max-height: 360px;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 18px 2px;
+}
+
+.artemis-chat__row {
+  display: flex;
+  width: 100%;
+}
+
+.artemis-chat__row--user {
+  justify-content: flex-end;
+}
+
+.artemis-chat__message {
+  max-width: 92%;
+  overflow-wrap: anywhere;
+  padding: 13px 16px;
+  border-radius: 10px;
+}
+
+.artemis-chat__message--assistant {
+  border: 1px solid rgba(0, 162, 255, 0.2);
+  background: #0b1220;
+  color: #dbeafe;
+}
+
+.artemis-chat__message--user {
+  border: 1px solid rgba(0, 224, 255, 0.28);
+  background: rgba(0, 120, 255, 0.18);
+  color: #fff;
+}
+
+.artemis-chat__author {
+  color: #00e0ff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.artemis-chat__message-text {
+  margin: 5px 0 0;
+  font-family: "Segoe UI", "Noto Sans", sans-serif;
+  font-size: 16px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.artemis-chat__exercise-link {
+  color: #67e8f9;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.artemis-chat__exercise-link:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.artemis-chat__error {
+  margin: 0 0 12px;
+  padding: 9px 11px;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  border-radius: 8px;
+  background: rgba(127, 29, 29, 0.22);
+  color: #fca5a5;
+  font-size: 13px;
+}
+
+.artemis-chat__form {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.artemis-chat__input {
+  min-width: 0;
+  flex: 1;
+  resize: vertical;
+  padding: 11px 12px;
+  border: 1px solid rgba(0, 100, 200, 0.3);
+  border-radius: 8px;
+  outline: none;
+  background: #0b0e1b;
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.artemis-chat__input:focus-visible {
+  border-color: #00b8d9;
+  box-shadow: 0 0 0 2px rgba(0, 184, 217, 0.2);
+}
+
+.artemis-chat__send {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #00b8d9 0%, #0066ff 100%);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.artemis-chat__send:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.artemis-chat__hint {
+  display: block;
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+@media (max-width: 600px) {
+  .artemis-chat {
+    padding: 16px;
+  }
+
+  .artemis-chat__status {
+    display: none;
+  }
+
+  .artemis-chat__message {
+    max-width: 96%;
+  }
+
+  .artemis-chat__message-text {
+    font-size: 15px;
+  }
+
+  .artemis-chat__form {
+    flex-direction: column;
+  }
+
+  .artemis-chat__send {
+    min-height: 42px;
+  }
+}
+
+.app-shell[data-theme="light"] .artemis-chat {
+  border-color: #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+}
+
+.app-shell[data-theme="light"] .artemis-chat__message--assistant {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #1e293b;
+}
+
+.app-shell[data-theme="light"] .artemis-chat__message--user {
+  color: #0f172a;
+}
+
+.app-shell[data-theme="light"] .artemis-chat__input {
+  border-color: #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+}
+
+.app-shell[data-theme="light"] .artemis-chat__exercise-link {
+  color: #0369a1;
+}

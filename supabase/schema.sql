@@ -56,6 +56,26 @@ create table if not exists public.user_goals (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.pesquisa (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references public.usuarios(id) on delete cascade,
+  objective text not null,
+  training_preferences text[] not null default '{}',
+  experience_level text not null,
+  weekly_frequency text not null,
+  available_time text not null,
+  training_location text not null,
+  equipment text not null default 'Academia completa',
+  gender text not null,
+  age smallint not null,
+  experience_months smallint not null default 0,
+  limitations text[] not null default '{}',
+  height_cm numeric(5,2) not null,
+  weight_kg numeric(5,2) not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- =========================================================
 -- 3. Plans and subscriptions
 -- =========================================================
@@ -76,7 +96,7 @@ create table if not exists public.user_subscriptions (
   user_id uuid not null references public.usuarios(id) on delete cascade,
   plan_id uuid not null references public.plans(id) on delete restrict,
   billing_cycle text not null check (billing_cycle in ('mensal', 'anual')),
-  status text not null default 'active' check (status in ('active', 'canceled', 'trialing', 'past_due')),
+  status text not null default 'active' check (status in ('pending', 'active', 'canceled', 'trialing', 'past_due')),
   started_at timestamptz not null default now(),
   ends_at timestamptz,
   created_at timestamptz not null default now()
@@ -92,6 +112,15 @@ create table if not exists public.exercises (
   muscle_group text,
   equipment text,
   difficulty text not null default 'intermediario',
+  modality text not null default 'Academia',
+  objectives text[] not null default '{}',
+  muscles text[] not null default '{}',
+  movement_pattern text,
+  unilateral boolean not null default false,
+  impact_level text not null default 'baixo',
+  instructions jsonb not null default '[]'::jsonb,
+  progressions text[] not null default '{}',
+  regressions text[] not null default '{}',
   description text,
   video_url text,
   demo_image_url text,
@@ -134,6 +163,10 @@ create table if not exists public.workout_sessions (
   user_id uuid not null references public.usuarios(id) on delete cascade,
   workout_id uuid references public.workout_templates(id) on delete set null,
   status text not null default 'planned' check (status in ('planned', 'in_progress', 'completed', 'canceled')),
+  scheduled_for date,
+  workout_title text,
+  duration_min integer,
+  plan_inputs jsonb not null default '{}'::jsonb,
   started_at timestamptz,
   completed_at timestamptz,
   score integer default 0,
@@ -171,7 +204,21 @@ create table if not exists public.notifications (
   icon text,
   title text not null,
   description text not null,
+  workout_session_id uuid references public.workout_sessions(id) on delete cascade,
+  source_key text,
   read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists idx_notifications_user_source_key
+  on public.notifications(user_id, source_key);
+
+create table if not exists public.artemis_messages (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.usuarios(id) on delete cascade,
+  role text not null check (role in ('user', 'assistant')),
+  message_type text not null default 'chat' check (message_type in ('chat', 'workout')),
+  content text not null,
   created_at timestamptz not null default now()
 );
 
@@ -180,9 +227,12 @@ create table if not exists public.notifications (
 -- =========================================================
 create index if not exists idx_usuarios_email on public.usuarios(email);
 create index if not exists idx_user_goals_user_id on public.user_goals(user_id);
+create index if not exists idx_pesquisa_user_id on public.pesquisa(user_id);
 create index if not exists idx_notifications_user_id on public.notifications(user_id);
+create index if not exists idx_artemis_messages_user_created on public.artemis_messages(user_id, created_at desc);
 create index if not exists idx_workout_templates_user_id on public.workout_templates(user_id);
 create index if not exists idx_workout_sessions_user_id on public.workout_sessions(user_id);
+create index if not exists idx_workout_sessions_user_scheduled_for on public.workout_sessions(user_id, scheduled_for);
 create index if not exists idx_progress_metrics_user_id on public.progress_metrics(user_id);
 
 -- =========================================================
@@ -208,6 +258,10 @@ for each row execute procedure public.update_updated_at_column();
 
 create trigger trg_user_goals_updated_at
 before update on public.user_goals
+for each row execute procedure public.update_updated_at_column();
+
+create trigger trg_pesquisa_updated_at
+before update on public.pesquisa
 for each row execute procedure public.update_updated_at_column();
 
 -- =========================================================
@@ -239,6 +293,7 @@ for each row execute procedure public.handle_new_user();
 alter table public.usuarios enable row level security;
 alter table public.user_settings enable row level security;
 alter table public.user_goals enable row level security;
+alter table public.pesquisa enable row level security;
 alter table public.plans enable row level security;
 alter table public.user_subscriptions enable row level security;
 alter table public.exercises enable row level security;
@@ -248,6 +303,7 @@ alter table public.workout_sessions enable row level security;
 alter table public.workout_session_exercises enable row level security;
 alter table public.progress_metrics enable row level security;
 alter table public.notifications enable row level security;
+alter table public.artemis_messages enable row level security;
 
 drop policy if exists profiles_select_own on public.usuarios;
 drop policy if exists usuarios_select_own on public.usuarios;
@@ -268,8 +324,22 @@ for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "goals_manage_own" on public.user_goals
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-create policy "subscriptions_manage_own" on public.user_subscriptions
+create policy "pesquisa_manage_own" on public.pesquisa
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists subscriptions_manage_own on public.user_subscriptions;
+drop policy if exists subscriptions_select_own on public.user_subscriptions;
+drop policy if exists subscriptions_insert_pending on public.user_subscriptions;
+drop policy if exists subscriptions_update_pending on public.user_subscriptions;
+create policy subscriptions_select_own on public.user_subscriptions
+for select using (auth.uid() = user_id);
+
+create policy subscriptions_insert_pending on public.user_subscriptions
+for insert with check (auth.uid() = user_id and status = 'pending');
+
+create policy subscriptions_update_pending on public.user_subscriptions
+for update using (auth.uid() = user_id and status = 'pending')
+with check (auth.uid() = user_id and status in ('pending', 'canceled'));
 
 create policy "plans_read_all" on public.plans
 for select using (auth.role() = 'authenticated');
@@ -317,6 +387,9 @@ create policy "progress_manage_own" on public.progress_metrics
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create policy "notifications_manage_own" on public.notifications
+for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create policy "artemis_messages_manage_own" on public.artemis_messages
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- =========================================================

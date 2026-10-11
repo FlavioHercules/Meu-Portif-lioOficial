@@ -1,16 +1,52 @@
-# React + Vite
+# MotionFit
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Aplicativo de treino e bem-estar com autenticação, rotina personalizada, IA e integração com Supabase.
 
-Currently, two official plugins are available:
+## Requisitos
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Node.js 18+
+- npm
+- Supabase configurado
+- Python 3.11+ para a API da Artemis
 
-## React Compiler
+## Configuração do frontend
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1. Crie um arquivo `.env` na pasta `motionfit` com:
 
-## Expanding the Oxlint configuration
+```
+VITE_SUPABASE_URL=sua_url_do_supabase
+VITE_SUPABASE_ANON_KEY=sua_chave_anonima
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+2. Instale as dependências:
+
+```
+npm install
+```
+
+3. Inicie o app:
+
+```
+npm run dev
+```
+
+## Configuração da API da Artemis
+
+O backend fica em `motionfit/api` e exige o arquivo `.env` com a chave do Gemini:
+
+```
+GEMINI_API_KEY=sua_chave
+GEMINI_MODEL=gemini-3.8-flash
+GEMINI_FALLBACK_MODELS=gemini-3.1-flash-lite
+```
+
+## Scripts
+
+- `npm run dev` — inicia o Vite em modo de desenvolvimento
+- `npm run build` — gera a build de produção
+- `npm run preview` — serve a build localmente
+
+## Observações
+
+- A API da Artemis não deve ser chamada no desenvolvimento local sem a chave correta configurada.
+- O fluxo de assinatura é controlado com política de RLS; pagamentos reais exigem integração externa.
