@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom';
 import Navbar from './Navbar';
 import { supabase } from '../lib/supabase';
 import { notifyWorkoutCompleted } from '../services/notifications';
+import { defaultSchedule, trainingDayIndexes, weekDays } from '../utils/trainingDays';
 
-const weekDays = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
 const emptyResearch = {
   objective: '',
   training_preferences: [],
@@ -55,19 +55,6 @@ function durationInMinutes(availableTime = '') {
   if (availableTime.startsWith('Até 30')) return 30;
   if (availableTime.includes('60')) return availableTime.startsWith('Mais') ? 60 : 45;
   return 45;
-}
-
-function scheduleIndexes(count) {
-  const schedules = {
-    1: [2],
-    2: [0, 3],
-    3: [0, 2, 4],
-    4: [0, 1, 3, 4],
-    5: [0, 1, 2, 3, 4],
-    6: [0, 1, 2, 3, 4, 5],
-    7: [0, 1, 2, 3, 4, 5, 6],
-  };
-  return schedules[count] || [];
 }
 
 function routineTitles(count, preferences) {
@@ -152,13 +139,12 @@ function limitationMatches(exercise, limitations = []) {
 
 function focusCategories(title) {
   const value = normalizeValue(title);
-  if (value.includes('condicionamento')) return ['cardio'];
-  if (value.includes('recuperacao')) return ['mobilidade'];
-  if (value.includes('inferiores')) return ['pernas e gluteos'];
+  if (value.includes('condicionamento') || value.includes('recuperacao')) return [];
+  if (value.includes('inferiores')) return ['quadriceps', 'posterior de coxa', 'gluteos', 'panturrilhas'];
   if (value.includes('empurrar')) return ['peito', 'ombros', 'triceps'];
   if (value.includes('puxar')) return ['costas', 'biceps'];
   if (value.includes('superiores')) return ['peito', 'costas', 'ombros', 'biceps', 'triceps'];
-  return ['pernas e gluteos', 'peito', 'costas', 'ombros', 'core'];
+  return ['peito', 'costas', 'ombros', 'biceps', 'triceps', 'antebracos', 'quadriceps', 'posterior de coxa', 'gluteos', 'panturrilhas', 'abdomen'];
 }
 
 function preferenceMatches(exercise, preferences = []) {
@@ -207,7 +193,6 @@ function buildExercisePlan(research, title, catalog) {
     if (selected.length === 6) break;
   }
 
-  const sets = maxDifficulty === 1 ? 2 : 3;
   const strengthFocus = objectives.includes('forca') && !objectives.includes('hipertrofia');
   return selected.map((exercise) => ({
     id: exercise.id,
@@ -221,8 +206,8 @@ function buildExercisePlan(research, title, catalog) {
     demo_image_url: exercise.demo_image_url,
     progressions: exercise.progressions,
     regressions: exercise.regressions,
-    sets,
-    reps: strengthFocus ? '5-8' : exercise.modality === 'Cardio' ? '8-15 min' : '8-12',
+    sets: maxDifficulty === 1 ? 2 : exercise.suggested_sets || 3,
+    reps: strengthFocus ? '5-8' : exercise.suggested_reps || '8-12',
     rest_seconds: strengthFocus ? 120 : 60,
   }));
 }
@@ -233,11 +218,11 @@ export default function Home({ userId, pesquisa, onPesquisaChange, onEditResearc
     ...emptyResearch,
     ...pesquisa,
     training_preferences: pesquisa?.training_preferences || [],
+    training_days: pesquisa?.training_days || [],
   }));
   const [sessions, setSessions] = useState([]);
   const [exerciseCatalog, setExerciseCatalog] = useState([]);
   const [activeDay, setActiveDay] = useState(weekDays[(today.getDay() + 6) % 7]);
-  const [selectedTrainingDays, setSelectedTrainingDays] = useState(() => scheduleIndexes(sessionsPerWeek(pesquisa?.weekly_frequency)));
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isCompleting, setIsCompleting] = useState(null);
@@ -253,7 +238,8 @@ export default function Home({ userId, pesquisa, onPesquisaChange, onEditResearc
       try {
         const { data: catalog, error: catalogError } = await runSupabaseQuery(supabase
           .from('exercises')
-          .select('id, name, category, muscle_group, equipment, equipment_options, difficulty, modality, objectives, muscles, movement_pattern, unilateral, impact_level, instructions, progressions, regressions, video_url, demo_image_url')
+          .select('id, name, category, muscle_group, equipment, equipment_options, difficulty, exercise_type, suggested_sets, suggested_reps, modality, objectives, muscles, movement_pattern, unilateral, impact_level, instructions, progressions, regressions, video_url, demo_image_url')
+          .eq('active', true)
           .order('name')
           .limit(1000));
 
@@ -302,6 +288,7 @@ export default function Home({ userId, pesquisa, onPesquisaChange, onEditResearc
         user_id: userId,
         objective: draft.objective,
         training_preferences: draft.training_preferences,
+        training_days: draft.training_days,
         experience_level: draft.experience_level,
         age: pesquisa.age,
         experience_months: pesquisa.experience_months,
@@ -336,11 +323,6 @@ export default function Home({ userId, pesquisa, onPesquisaChange, onEditResearc
       setErrorMessage('Selecione uma frequência semanal válida na pesquisa do perfil.');
       return;
     }
-    if (selectedTrainingDays.length !== count) {
-      setErrorMessage(`Selecione ${count} ${count === 1 ? 'dia' : 'dias'} para sua frequência semanal.`);
-      return;
-    }
-
     setIsGenerating(true);
     setErrorMessage('');
     setSuccessMessage('');
@@ -355,7 +337,8 @@ export default function Home({ userId, pesquisa, onPesquisaChange, onEditResearc
     const weekEndDate = new Date(monday);
     weekEndDate.setDate(weekEndDate.getDate() + 6);
     const weekEnd = toDateKey(weekEndDate);
-    const indexes = [...selectedTrainingDays].sort((first, second) => first - second);
+    const selectedDays = trainingDayIndexes(draft.training_days);
+    const indexes = selectedDays.length === count ? selectedDays : defaultSchedule(count);
     const titles = routineTitles(count, draft.training_preferences);
     const planInputs = {
       objective: draft.objective,
@@ -516,16 +499,7 @@ export default function Home({ userId, pesquisa, onPesquisaChange, onEditResearc
           </section>
 
           <section className="home-generator rounded-xl border border-cyan-300/20 bg-[#070913] p-5 md:p-6">
-            <div className="mb-4"><p className="text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">Recomendação personalizada</p><h2 className="mt-1 text-lg font-bold">Gerar meu treino</h2><p className="mt-1 text-xs text-slate-500">A seleção usa seu objetivo, nível, experiência, local, equipamentos e limitações.</p></div>
-            <fieldset className="mb-4">
-              <legend className="mb-2 text-xs font-semibold text-slate-300">Dias de treino ({selectedTrainingDays.length}/{weeklyTarget || 0})</legend>
-              <div className="grid grid-cols-7 gap-1">
-                {weekDays.map((day, index) => {
-                  const isSelected = selectedTrainingDays.includes(index);
-                  return <button key={day} type="button" aria-pressed={isSelected} onClick={() => setSelectedTrainingDays((current) => isSelected ? current.filter((item) => item !== index) : [...current, index].sort((first, second) => first - second))} className={`min-h-10 text-xs font-bold transition ${isSelected ? 'bg-cyan-400 text-slate-950' : 'bg-[#0b0e1b] text-slate-400 hover:text-white'}`}>{day}</button>;
-                })}
-              </div>
-            </fieldset>
+            <div className="mb-4"><p className="text-[10px] font-bold uppercase tracking-[0.14em] text-cyan-300">Recomendação personalizada</p><h2 className="mt-1 text-lg font-bold">Gerar meu treino</h2><p className="mt-1 text-xs text-slate-400">A rotina usa os dias escolhidos em Preferências para seu treino, além do seu objetivo, nível, equipamentos e limitações.</p><Link to="/ia" className="mt-2 inline-flex text-xs font-semibold text-cyan-200 underline underline-offset-4">Editar preferências e dias</Link></div>
             <button type="button" disabled={isGenerating || isLoading} onClick={handleGenerateRoutine} className="w-full rounded-xl bg-gradient-to-r from-cyan-500 to-sky-700 px-4 py-3 text-sm font-bold text-white transition hover:brightness-110 disabled:cursor-wait disabled:opacity-50 sm:w-auto">{isGenerating ? 'Preparando treino...' : 'Gerar rotina semanal'}</button>
             {errorMessage && <p role="alert" className="mt-3 text-sm text-rose-300">{errorMessage}</p>}
             {successMessage && <p role="status" className="mt-3 text-sm text-emerald-300">{successMessage}</p>}

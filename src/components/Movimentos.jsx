@@ -2,26 +2,85 @@ import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import Navbar from './Navbar';
 import { supabase } from '../lib/supabase';
-import { findExerciseByName, findExercisesInWorkout, loadAiWorkout, readAiWorkout } from '../services/aiWorkoutStorage';
+import { findExerciseByName } from '../services/aiWorkoutStorage';
 import { notifyWorkoutCompleted } from '../services/notifications';
 
 function currentTimestamp() {
   return new Date().toISOString();
 }
 
+function normalizeFilterValue(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLocaleLowerCase('pt-BR');
+}
+
+const exerciseMuscleGroups = [
+  { label: 'Peito', categories: ['peito'], muscles: ['peitoral', 'ombro', 'triceps'] },
+  { label: 'Costas', categories: ['costas'], muscles: ['dorsais', 'romboides', 'trapezio', 'biceps'] },
+  { label: 'Ombros', categories: ['ombros'], muscles: ['ombro', 'trapezio', 'triceps'] },
+  { label: 'Bíceps', categories: ['biceps'], muscles: ['biceps', 'antebracos'] },
+  { label: 'Tríceps', categories: ['triceps'], muscles: ['triceps', 'peitoral', 'ombro'] },
+  { label: 'Antebraços', categories: ['antebracos'], muscles: ['antebracos', 'biceps'] },
+  { label: 'Quadríceps', categories: ['quadriceps'], muscles: ['quadriceps', 'gluteos'] },
+  { label: 'Posterior de coxa', categories: ['posterior de coxa'], muscles: ['posteriores', 'gluteos'] },
+  { label: 'Glúteos', categories: ['gluteos'], muscles: ['gluteos', 'quadriceps', 'posteriores'] },
+  { label: 'Panturrilhas', categories: ['panturrilhas'], muscles: ['panturrilhas'] },
+  { label: 'Abdômen', categories: ['abdomen'], muscles: ['abdomen', 'obliquos', 'core'] },
+];
+
+const muscleLabels = {
+  deltoides: 'Ombro',
+  peitoral: 'Peitoral',
+  biceps: 'Bíceps',
+  triceps: 'Tríceps',
+  antebracos: 'Antebraços',
+  quadriceps: 'Quadríceps',
+  gluteos: 'Glúteos',
+  posteriores: 'Posteriores',
+  panturrilhas: 'Panturrilhas',
+  dorsais: 'Dorsais',
+  romboides: 'Romboides',
+  trapezio: 'Trapézio',
+  abdomen: 'Abdômen',
+  obliquos: 'Oblíquos',
+  core: 'Core',
+};
+
+function exerciseMuscleKeys(exercise) {
+  const muscles = exercise.muscles?.length
+    ? exercise.muscles
+    : (exercise.muscle_group || '').split(/[,;]|\s+e\s+/i);
+  return muscles.map(normalizeFilterValue).filter(Boolean);
+}
+
+function canonicalMuscleKey(muscleKey) {
+  if (muscleKey.startsWith('deltoid')) return 'ombro';
+  if (muscleKey.startsWith('posterior')) return 'posteriores';
+  const knownMuscles = ['peitoral', 'dorsais', 'romboides', 'trapezio', 'biceps', 'triceps', 'antebracos', 'quadriceps', 'gluteos', 'panturrilhas', 'abdomen', 'obliquos', 'core'];
+  return knownMuscles.find((muscle) => muscleKey === muscle || muscleKey.startsWith(`${muscle} `)) || muscleKey;
+}
+
+function muscleLabel(muscleKey) {
+  return muscleLabels[canonicalMuscleKey(muscleKey)] || muscleKey.replace(/\b\p{L}/gu, (letter) => letter.toLocaleUpperCase('pt-BR'));
+}
+
 export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState('movimentos');
   const [selectedCategory, setSelectedCategory] = useState('todos');
+  const [selectedMuscleGroup, setSelectedMuscleGroup] = useState('todos');
+  const [selectedMuscle, setSelectedMuscle] = useState('todos');
   const [searchTerm, setSearchTerm] = useState('');
-  const [showSuggestedOnly, setShowSuggestedOnly] = useState(false);
   const [exercises, setExercises] = useState([]);
   const [workouts, setWorkouts] = useState([]);
-  const [aiWorkout, setAiWorkout] = useState(() => readAiWorkout(userId));
   const [selectedExercise, setSelectedExercise] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isUpdatingSession, setIsUpdatingSession] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [libraryErrorMessage, setLibraryErrorMessage] = useState('');
 
   useEffect(() => {
     let isActive = true;
@@ -30,7 +89,8 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
       const [exerciseResult, workoutResult] = await Promise.all([
         supabase
           .from('exercises')
-          .select('id, name, category, muscle_group, equipment, equipment_options, difficulty, modality, objectives, muscles, movement_pattern, unilateral, impact_level, instructions, progressions, regressions, video_url, demo_image_url')
+          .select('id, name, category, muscle_group, equipment, difficulty, exercise_type, suggested_sets, suggested_reps, modality, objectives, muscles, movement_pattern, unilateral, impact_level, instructions, progressions, regressions, video_url, demo_image_url')
+          .eq('active', true)
           .order('name'),
         supabase
           .from('workout_sessions')
@@ -38,16 +98,20 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
           .eq('user_id', userId)
           .order('scheduled_for', { ascending: false, nullsFirst: false }),
       ]);
-          const savedAiWorkout = await loadAiWorkout(userId).catch(() => readAiWorkout(userId));
 
       if (!isActive) return;
 
-      if (exerciseResult.error || workoutResult.error) {
-        setErrorMessage('Não foi possível carregar a biblioteca. Confira as tabelas e a migração do Supabase.');
+      if (exerciseResult.error) {
+        console.error('Falha ao carregar catálogo de exercícios do Supabase:', exerciseResult.error);
+        const code = exerciseResult.error.code ? ` (${exerciseResult.error.code})` : '';
+        setLibraryErrorMessage(`Falha ao carregar exercícios${code}: ${exerciseResult.error.message}`);
+      } else if (workoutResult.error) {
+        console.error('Falha ao carregar sessões de treino do Supabase:', workoutResult.error);
+        const code = workoutResult.error.code ? ` (${workoutResult.error.code})` : '';
+        setErrorMessage(`Os movimentos foram carregados, mas as sessões falharam${code}: ${workoutResult.error.message}`);
       }
       setExercises(exerciseResult.data || []);
       setWorkouts(workoutResult.data || []);
-      setAiWorkout(savedAiWorkout);
       setIsLoading(false);
     };
 
@@ -57,32 +121,55 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
     };
   }, [userId]);
 
-  const categories = activeTab === 'movimentos'
-    ? [...new Set(exercises.map((exercise) => exercise.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'))
-    : [
-        { label: 'Planejados', value: 'planned' },
-        { label: 'Em andamento', value: 'in_progress' },
-        { label: 'Concluídos', value: 'completed' },
-      ];
-  const normalizedSearch = searchTerm.trim().toLocaleLowerCase('pt-BR');
-  const suggestedExercises = aiWorkout ? findExercisesInWorkout(aiWorkout.content, exercises) : [];
-  const suggestedExerciseIds = new Set(suggestedExercises.map((exercise) => exercise.id));
+  const exerciseCategories = [...new Map(exercises
+    .map((exercise) => exercise.category?.trim())
+    .filter(Boolean)
+    .map((category) => [normalizeFilterValue(category), category])).entries()];
+  const knownExerciseCategories = new Set(exerciseMuscleGroups.flatMap((group) => group.categories));
+  const muscleGroupOptions = [
+    ...exerciseMuscleGroups
+      .filter((group) => exerciseCategories.some(([category]) => group.categories.includes(category)))
+      .map((group) => ({ ...group, value: normalizeFilterValue(group.label) })),
+    ...exerciseCategories
+      .filter(([category]) => !knownExerciseCategories.has(category))
+      .map(([value, label]) => ({ label, value, categories: [value], muscles: [] })),
+  ];
+  const workoutStatusOptions = [
+    { label: 'Planejados', value: 'planned' },
+    { label: 'Em andamento', value: 'in_progress' },
+    { label: 'Concluídos', value: 'completed' },
+    { label: 'Cancelados', value: 'canceled' },
+  ];
+  const selectedMuscleGroupData = muscleGroupOptions.find((group) => group.value === selectedMuscleGroup);
+  const exercisesInMuscleGroup = exercises.filter((exercise) =>
+    selectedMuscleGroupData?.categories.includes(normalizeFilterValue(exercise.category)));
+  const availableMuscles = new Set(exercisesInMuscleGroup.flatMap(exerciseMuscleKeys).map(canonicalMuscleKey));
+  const muscleOptions = selectedMuscleGroupData
+    ? [...availableMuscles]
+      .filter((muscle) => selectedMuscleGroupData.muscles.includes(muscle))
+      .sort((first, second) => selectedMuscleGroupData.muscles.indexOf(first) - selectedMuscleGroupData.muscles.indexOf(second))
+      .map((value) => ({ label: muscleLabel(value), value }))
+    : [];
+  const normalizedSearch = normalizeFilterValue(searchTerm);
   const filteredExercises = exercises.filter((exercise) => {
-    const matchesCategory = selectedCategory === 'todos' || exercise.category?.toLocaleLowerCase('pt-BR') === selectedCategory;
-    const searchableText = [exercise.name, exercise.category, exercise.muscle_group, exercise.equipment, exercise.modality, exercise.description, ...(exercise.objectives || []), ...(exercise.muscles || [])].filter(Boolean).join(' ').toLocaleLowerCase('pt-BR');
-    return matchesCategory
-      && (!normalizedSearch || searchableText.includes(normalizedSearch))
-      && (!showSuggestedOnly || suggestedExerciseIds.has(exercise.id));
+    const matchesMuscleGroup = selectedMuscleGroup === 'todos'
+      || selectedMuscleGroupData?.categories.includes(normalizeFilterValue(exercise.category));
+    const matchesMuscle = selectedMuscle === 'todos'
+      || exerciseMuscleKeys(exercise).map(canonicalMuscleKey).includes(selectedMuscle);
+    const searchableText = normalizeFilterValue([exercise.name, exercise.category, exercise.muscle_group, exercise.equipment, exercise.modality, exercise.description, ...(exercise.objectives || []), ...(exercise.muscles || [])].filter(Boolean).join(' '));
+    return matchesMuscleGroup
+      && matchesMuscle
+      && (!normalizedSearch || searchableText.includes(normalizedSearch));
   });
   const filteredWorkouts = workouts.filter((workout) => {
     const exercisesInPlan = workout.plan_inputs?.exercise_plan || [];
-    const searchableText = [workout.workout_title, workout.status, ...exercisesInPlan.map((exercise) => exercise.name)].filter(Boolean).join(' ').toLocaleLowerCase('pt-BR');
+    const searchableText = normalizeFilterValue([workout.workout_title, workout.status, ...exercisesInPlan.map((exercise) => exercise.name)].filter(Boolean).join(' '));
     return (!normalizedSearch || searchableText.includes(normalizedSearch))
       && (selectedCategory === 'todos' || workout.status === selectedCategory);
   });
   const categoryOptions = activeTab === 'movimentos'
-    ? [{ label: 'Todos', value: 'todos' }, ...categories.map((category) => ({ label: category, value: category.toLocaleLowerCase('pt-BR') }))]
-    : [{ label: 'Todos', value: 'todos' }, ...categories];
+    ? [{ label: 'Todos os grupos', value: 'todos' }, ...muscleGroupOptions]
+    : [{ label: 'Todos', value: 'todos' }, ...workoutStatusOptions];
   const completedWorkouts = workouts.filter((workout) => workout.status === 'completed');
   const completedExerciseCount = completedWorkouts.reduce((total, workout) => total + (workout.plan_inputs?.exercise_plan?.length || 0), 0);
   const completedMinutes = completedWorkouts.reduce((total, workout) => total + (workout.duration_min || 0), 0);
@@ -121,7 +208,7 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
   };
 
   const renderExerciseCard = (exercise) => (
-    <article key={exercise.id} style={styles.exerciseCard}>
+    <article key={exercise.id} className="movement-exercise-card" style={styles.exerciseCard}>
       <div style={styles.exerciseMedia}>
         {exercise.video_url ? (
           <video controls playsInline preload="metadata" poster={exercise.demo_image_url || undefined} style={styles.exerciseVideo} aria-label={`Demonstração de ${exercise.name}`}>
@@ -137,10 +224,19 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
           </div>
         )}
       </div>
-      <h3 style={styles.exerciseName}>{exercise.name}</h3>
-      <span style={styles.exerciseMeta}>{[exercise.muscle_group || exercise.category, exercise.difficulty, exercise.modality].filter(Boolean).join(' · ')}</span>
-      <span style={styles.exerciseEquipment}>{exercise.equipment || 'Equipamento não informado'}</span>
-      <button type="button" onClick={() => setSelectedExercise(exercise)} style={styles.exerciseDetailsButton}>Ver instruções</button>
+      <div style={styles.exerciseCardContent}>
+        <span style={styles.exerciseCategory}>{exercise.category || 'Movimento'}</span>
+        <h3 style={styles.exerciseName}>{exercise.name}</h3>
+        <div style={styles.exerciseMeta}>
+          {[exercise.exercise_type === 'composto' ? 'Composto' : 'Isolado', exercise.difficulty, exercise.modality].filter(Boolean).map((item, index) => (
+            <span key={`${item}-${index}`} style={styles.exerciseMetaTag}>{item}</span>
+          ))}
+        </div>
+        <span style={styles.exerciseEquipment}>{exercise.equipment || 'Equipamento não informado'}</span>
+        <button type="button" onClick={() => setSelectedExercise(exercise)} style={styles.exerciseDetailsButton}>
+          Ver exercício <span aria-hidden="true">→</span>
+        </button>
+      </div>
     </article>
   );
 
@@ -162,8 +258,32 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
         @media (max-width: 900px) {
           .movements-dashboard { grid-template-columns: minmax(0, 1fr) !important; padding: 16px !important; }
           .movements-hero { grid-template-columns: minmax(0, 1fr) !important; }
-          .movements-filter { align-items: stretch !important; }
-          .movements-category-pills { flex-wrap: wrap; }
+          .movements-filter-main { grid-template-columns: 1fr !important; }
+          .movements-filter-categories,
+          .movements-filter-subcategories { align-items: flex-start !important; flex-direction: column; }
+        }
+        @media (max-width: 640px) {
+          .movements-filter { padding: 14px !important; }
+          .movements-filter-main { gap: 12px !important; }
+          .movements-category-pills { width: 100%; }
+        }
+        .movements-category-pills {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .movement-exercise-card {
+          transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+        }
+        .movement-exercise-card:hover {
+          transform: translateY(-3px);
+          border-color: rgba(0, 224, 255, 0.52) !important;
+          box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28), 0 0 20px rgba(0, 224, 255, 0.08);
+        }
+        .movement-filter-button:focus-visible,
+        .movement-search-input:focus-visible {
+          outline: 2px solid #00e0ff;
+          outline-offset: 2px;
         }
       `}</style>
       {/* 1. Navbar Superior */}
@@ -235,99 +355,116 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
 
           {/* Barra de Filtros e Pesquisa */}
           <div className="movements-filter" style={styles.filterBarCard}>
-            <div style={styles.toggleGroup}>
-              <button
-                type="button"
-                aria-pressed={activeTab === 'movimentos'}
-                onClick={() => { setActiveTab('movimentos'); setSelectedCategory('todos'); setShowSuggestedOnly(false); }}
-                style={{
-                  ...styles.toggleBtn,
-                  ...(activeTab === 'movimentos' ? styles.toggleBtnActive : {})
-                }}
-              >
-                <span>🏋️</span> Movimentos
-              </button>
-              <button
-                type="button"
-                aria-pressed={activeTab === 'treinos'}
-                onClick={() => { setActiveTab('treinos'); setSelectedCategory('todos'); setShowSuggestedOnly(false); }}
-                style={{
-                  ...styles.toggleBtn,
-                  ...(activeTab === 'treinos' ? styles.toggleBtnActive : {})
-                }}
-              >
-                <span>📅</span> Treinos
-              </button>
-            </div>
-
-            <div style={styles.searchBox}>
-              <span style={{ color: '#64748b', fontSize: '14px' }}>🔍</span>
-              <input
-                type="text"
-                placeholder={activeTab === 'movimentos' ? 'Buscar por nome, músculo ou equipamento...' : 'Buscar nos seus treinos...'}
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                style={styles.searchInput}
-              />
-            </div>
-
-            <div className="movements-category-pills" style={styles.categoryPills}>
-              {categoryOptions.map(({ label, value }) => {
-                const isSel = selectedCategory === value;
-                return (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-pressed={isSel}
-                    onClick={() => setSelectedCategory(value)}
-                    style={{
-                      ...styles.pillBtn,
-                      ...(isSel ? styles.pillBtnActive : {})
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {errorMessage && <p role="alert" style={styles.errorMessage}>{errorMessage}</p>}
-
-          {aiWorkout && (
-            <section style={styles.sectionCard} aria-labelledby="today-workout-title">
-              <div style={styles.sectionHeader}>
-                <div>
-                  <span id="today-workout-title" style={styles.sectionTitleText}>TREINO DE HOJE</span>
-                  <p style={styles.resultCount}>
-                    Preparado pela Artemis · {aiWorkout.createdAt ? new Date(aiWorkout.createdAt).toLocaleDateString('pt-BR') : 'Salvo neste dispositivo'}
-                  </p>
-                </div>
+            <div className="movements-filter-main" style={styles.filterMain}>
+              <div style={styles.toggleGroup}>
                 <button
                   type="button"
-                  aria-pressed={showSuggestedOnly}
-                  onClick={() => {
-                    setActiveTab('movimentos');
-                    setSelectedCategory('todos');
-                    setSearchTerm('');
-                    setShowSuggestedOnly((current) => !current);
+                  aria-pressed={activeTab === 'movimentos'}
+                  onClick={() => { setActiveTab('movimentos'); setSelectedCategory('todos'); setSelectedMuscleGroup('todos'); setSelectedMuscle('todos'); setSearchTerm(''); }}
+                  style={{
+                    ...styles.toggleBtn,
+                    ...(activeTab === 'movimentos' ? styles.toggleBtnActive : {})
                   }}
-                  style={styles.suggestionFilterButton}
                 >
-                  {showSuggestedOnly ? 'Mostrar biblioteca completa' : 'Ver só esses movimentos'}
+                  <span>🏋️</span> Movimentos
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={activeTab === 'treinos'}
+                  onClick={() => { setActiveTab('treinos'); setSelectedCategory('todos'); setSelectedMuscleGroup('todos'); setSelectedMuscle('todos'); setSearchTerm(''); }}
+                  style={{
+                    ...styles.toggleBtn,
+                    ...(activeTab === 'treinos' ? styles.toggleBtnActive : {})
+                  }}
+                >
+                  <span>📅</span> Treinos
                 </button>
               </div>
-              <div style={styles.recommendedResponse}>{aiWorkout.content}</div>
-              <div style={styles.suggestedExercisesHeader}>
-                <h3 style={styles.suggestedExercisesTitle}>Exercícios da biblioteca</h3>
-                <span style={styles.suggestedExercisesCount}>{suggestedExercises.length}</span>
+
+              <div style={styles.searchBox}>
+                <span style={{ color: '#64748b', fontSize: '14px' }}>🔍</span>
+                <input
+                  className="movement-search-input"
+                  type="text"
+                  placeholder={activeTab === 'movimentos' ? 'Buscar por nome, músculo ou equipamento...' : 'Buscar nos seus treinos...'}
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  style={styles.searchInput}
+                />
+                {searchTerm && (
+                  <button
+                    type="button"
+                    aria-label="Limpar busca"
+                    onClick={() => setSearchTerm('')}
+                    style={styles.clearSearchButton}
+                  >
+                    ×
+                  </button>
+                )}
               </div>
-              {suggestedExercises.length ? (
-                <div style={styles.exerciseGrid}>{suggestedExercises.map(renderExerciseCard)}</div>
-              ) : (
-                <p style={styles.workoutMeta}>Os nomes sugeridos não coincidiram com os exercícios cadastrados. A recomendação completa continua disponível acima.</p>
-              )}
-            </section>
+            </div>
+
+            <div className="movements-filter-categories" style={styles.filterCategories}>
+              <span style={styles.filterLabel}>{activeTab === 'movimentos' ? 'Grupo muscular' : 'Status do treino'}</span>
+              <div className="movements-category-pills" style={styles.categoryPills}>
+                {categoryOptions.map(({ label, value }) => {
+                  const isSel = activeTab === 'movimentos'
+                    ? selectedMuscleGroup === value
+                    : selectedCategory === value;
+                  return (
+                    <button
+                      key={value}
+                      className="movement-filter-button"
+                      type="button"
+                      aria-pressed={isSel}
+                      onClick={() => {
+                        if (activeTab === 'movimentos') {
+                          setSelectedMuscleGroup(value);
+                          setSelectedMuscle('todos');
+                        } else {
+                          setSelectedCategory(value);
+                        }
+                      }}
+                      style={{
+                        ...styles.pillBtn,
+                        ...(isSel ? styles.pillBtnActive : {})
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {activeTab === 'movimentos' && selectedMuscleGroupData && muscleOptions.length > 0 && (
+              <div className="movements-filter-subcategories" style={styles.filterCategories}>
+                <span style={styles.filterLabel}>Músculo específico</span>
+                <div className="movements-category-pills" style={styles.categoryPills}>
+                  {[{ label: 'Todos', value: 'todos' }, ...muscleOptions].map(({ label, value }) => {
+                    const isSel = selectedMuscle === value;
+                    return (
+                      <button
+                        key={value}
+                        className="movement-filter-button"
+                        type="button"
+                        aria-pressed={isSel}
+                        onClick={() => setSelectedMuscle(value)}
+                        style={{
+                          ...styles.pillBtn,
+                          ...(isSel ? styles.pillBtnActive : {}),
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {(libraryErrorMessage || errorMessage) && (
+            <p role="alert" style={styles.errorMessage}>{libraryErrorMessage || errorMessage}</p>
           )}
 
           {activeTab === 'movimentos' ? (
@@ -344,8 +481,8 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
                 </div>
               ) : (
                 <div style={styles.emptyState}>
-                  <h3>{isLoading ? 'Buscando movimentos' : exercises.length ? 'Nenhum resultado' : 'Catálogo sem movimentos'}</h3>
-                  <p>{isLoading ? 'A biblioteca aparecerá aqui em instantes.' : exercises.length ? 'Tente outro termo ou categoria.' : 'Cadastre exercícios na tabela exercises do Supabase para exibi-los aqui.'}</p>
+                  <h3>{isLoading ? 'Buscando movimentos' : libraryErrorMessage ? 'Não foi possível carregar o catálogo' : exercises.length ? 'Nenhum resultado' : 'Catálogo sem movimentos'}</h3>
+                  <p>{isLoading ? 'A biblioteca aparecerá aqui em instantes.' : libraryErrorMessage ? 'Veja o erro acima para identificar a coluna, permissão ou migração pendente.' : exercises.length ? 'Tente outro termo ou categoria.' : 'A consulta funcionou, mas não há exercícios ativos. Aplique a migração 20261015_curated_exercise_library.sql no Supabase.'}</p>
                 </div>
               )}
             </section>
@@ -485,7 +622,7 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
               <span style={{ fontSize: '16px' }}>📚</span>
               <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 700, letterSpacing: '0.05em' }}>CATÁLOGO</span>
             </div>
-            <p style={styles.emptySidebarText}>{exercises.length} movimentos disponíveis em {categories.length} categorias.</p>
+            <p style={styles.emptySidebarText}>{exercises.length} movimentos disponíveis em {exerciseCategories.length} categorias.</p>
             <Link to="/" style={styles.sidebarLink}>Montar rotina na Home →</Link>
           </div>
 
@@ -496,13 +633,23 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
         <div className="safe-overlay" role="presentation" onClick={closeExerciseDialog} style={styles.modalBackdrop}>
           <section role="dialog" aria-modal="true" aria-labelledby="exercise-dialog-title" onClick={(event) => event.stopPropagation()} style={styles.exerciseDialog}>
             <button type="button" aria-label="Fechar detalhes" onClick={closeExerciseDialog} style={styles.closeDialogButton}>×</button>
-            {displayedExercise.demo_image_url && <img src={displayedExercise.demo_image_url} alt={displayedExercise.name} style={styles.dialogImage} />}
+            {displayedExercise.video_url ? (
+              <video controls autoPlay playsInline preload="auto" poster={displayedExercise.demo_image_url || undefined} style={styles.dialogImage} aria-label={`Demonstração de ${displayedExercise.name}`}>
+                <source src={displayedExercise.video_url} />
+                Seu navegador não suporta vídeos HTML5.
+              </video>
+            ) : displayedExercise.demo_image_url ? (
+              <img src={displayedExercise.demo_image_url} alt={displayedExercise.name} style={styles.dialogImage} />
+            ) : null}
             <p style={styles.dialogEyebrow}>{displayedExercise.category}{displayedExercise.muscle_group ? ` · ${displayedExercise.muscle_group}` : ''}</p>
             <h2 id="exercise-dialog-title" style={styles.dialogTitle}>{displayedExercise.name}</h2>
             {displayedExercise.description && <p style={styles.dialogDescription}>{displayedExercise.description}</p>}
             <dl style={styles.exerciseDetails}>
+              <div><dt>Grupo muscular</dt><dd>{displayedExercise.muscle_group || displayedExercise.category}</dd></div>
+              <div><dt>Categoria</dt><dd>{displayedExercise.exercise_type === 'composto' ? 'Composto' : 'Isolado'}</dd></div>
               <div><dt>Dificuldade</dt><dd>{displayedExercise.difficulty || 'Não informada'}</dd></div>
               <div><dt>Equipamento</dt><dd>{displayedExercise.equipment || 'Não informado'}</dd></div>
+              <div><dt>Sugestão inicial</dt><dd>{displayedExercise.suggested_sets || 3} séries · {displayedExercise.suggested_reps || '8-12'} repetições</dd></div>
               <div><dt>Modalidade</dt><dd>{displayedExercise.modality || 'Não informada'}</dd></div>
               <div><dt>Impacto</dt><dd>{displayedExercise.impact_level || 'Não informado'}</dd></div>
             </dl>
@@ -637,11 +784,33 @@ const styles = {
     backgroundColor: '#070913',
     border: '1px solid rgba(0, 100, 200, 0.25)',
     borderRadius: '16px',
-    padding: '16px 20px',
+    padding: '18px 20px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: '16px'
+  },
+  filterMain: {
+    display: 'grid',
+    gridTemplateColumns: 'auto minmax(0, 1fr)',
+    alignItems: 'center',
+    gap: '14px'
+  },
+  filterCategories: {
     display: 'flex',
     alignItems: 'center',
-    gap: '14px',
-    flexWrap: 'wrap'
+    flexWrap: 'wrap',
+    gap: '12px',
+    paddingTop: '14px',
+    borderTop: '1px solid rgba(148, 163, 184, 0.12)'
+  },
+  filterLabel: {
+    flex: '0 0 auto',
+    color: '#64748b',
+    fontSize: '11px',
+    fontWeight: 700,
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase'
   },
   toggleGroup: {
     display: 'flex',
@@ -677,7 +846,8 @@ const styles = {
     borderRadius: '10px',
     padding: '6px 12px',
     gap: '8px',
-    minWidth: 0
+    minWidth: 0,
+    minHeight: '42px'
   },
   searchInput: {
     backgroundColor: 'transparent',
@@ -687,24 +857,36 @@ const styles = {
     outline: 'none',
     width: '100%'
   },
+  clearSearchButton: {
+    flex: '0 0 auto',
+    border: 0,
+    background: 'transparent',
+    color: '#94a3b8',
+    fontSize: '20px',
+    lineHeight: 1,
+    padding: '2px 4px',
+    cursor: 'pointer'
+  },
   categoryPills: {
     display: 'flex',
-    gap: '6px'
+    gap: '7px',
+    minWidth: 0
   },
   pillBtn: {
     backgroundColor: '#0b0e1b',
-    border: '1px solid rgba(0, 100, 200, 0.2)',
-    borderRadius: '8px',
-    padding: '6px 10px',
-    fontSize: '10px',
+    border: '1px solid rgba(148, 163, 184, 0.16)',
+    borderRadius: '999px',
+    padding: '8px 13px',
+    fontSize: '11px',
     fontWeight: 700,
     color: '#94a3b8',
-    cursor: 'pointer'
+    cursor: 'pointer',
+    transition: 'background-color 140ms ease, border-color 140ms ease, color 140ms ease'
   },
   pillBtnActive: {
-    backgroundColor: '#00e0ff',
-    color: '#050508',
-    borderColor: '#00e0ff'
+    backgroundColor: 'rgba(0, 224, 255, 0.13)',
+    color: '#67e8f9',
+    borderColor: 'rgba(0, 224, 255, 0.55)'
   },
 
   sectionCard: {
@@ -862,71 +1044,28 @@ const styles = {
   },
   exerciseGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))',
-    gap: '10px'
-  },
-  recommendedResponse: {
-    marginBottom: '18px',
-    padding: '16px 18px',
-    borderLeft: '3px solid #00b8d9',
-    backgroundColor: '#080c16',
-    color: '#e2e8f0',
-    fontFamily: '"Segoe UI", "Noto Sans", sans-serif',
-    fontSize: '16px',
-    lineHeight: '1.7',
-    whiteSpace: 'pre-wrap',
-    overflowWrap: 'anywhere'
-  },
-  suggestionFilterButton: {
-    border: '1px solid rgba(0, 224, 255, 0.35)',
-    borderRadius: '8px',
-    padding: '9px 12px',
-    backgroundColor: 'transparent',
-    color: '#67e8f9',
-    fontSize: '13px',
-    fontWeight: 700,
-    cursor: 'pointer'
-  },
-  suggestedExercisesHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '9px',
-    marginBottom: '12px'
-  },
-  suggestedExercisesTitle: {
-    margin: 0,
-    color: '#e2e8f0',
-    fontSize: '15px',
-    fontWeight: 800
-  },
-  suggestedExercisesCount: {
-    minWidth: '24px',
-    padding: '3px 7px',
-    borderRadius: '12px',
-    backgroundColor: 'rgba(0, 224, 255, 0.12)',
-    color: '#67e8f9',
-    fontSize: '12px',
-    fontWeight: 700,
-    textAlign: 'center'
+    gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 220px), 1fr))',
+    gap: '16px'
   },
   exerciseCard: {
     minWidth: 0,
-    border: '1px solid rgba(0, 100, 200, 0.2)',
-    backgroundColor: '#0b0e1b',
-    padding: '10px',
+    overflow: 'hidden',
+    border: '1px solid rgba(148, 163, 184, 0.16)',
+    borderRadius: '15px',
+    background: 'linear-gradient(160deg, #111827 0%, #090d18 100%)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'stretch',
     textAlign: 'left',
-    cursor: 'pointer',
-    color: '#fff'
+    color: '#fff',
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.18)'
   },
   exerciseMedia: {
     width: '100%',
-    aspectRatio: '16 / 9',
+    aspectRatio: '16 / 10',
     overflow: 'hidden',
-    marginBottom: '10px',
-    backgroundColor: '#04060b'
+    backgroundColor: '#04060b',
+    borderBottom: '1px solid rgba(148, 163, 184, 0.12)'
   },
   exerciseVideo: {
     display: 'block',
@@ -949,35 +1088,75 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: '6px',
-    background: 'linear-gradient(135deg, #10253a, #07101a 65%, #12281f)',
-    color: '#82e8ee',
-    fontSize: '10px',
+    background: 'radial-gradient(ellipse at 50% 20%, rgba(0, 224, 255, 0.16), transparent 55%), linear-gradient(135deg, #111c2c, #080d17 65%, #10271f)',
+    color: '#a5f3fc',
+    fontSize: '11px',
     fontWeight: 700
   },
-  exerciseName: {
-    fontSize: '12px',
-    fontWeight: 800,
-    marginBottom: '4px'
+  exerciseCardContent: {
+    minWidth: 0,
+    padding: '14px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    flex: 1
   },
-  exerciseMeta: {
-    color: '#94a3b8',
-    fontSize: '10px',
-    marginBottom: '4px'
-  },
-  exerciseEquipment: {
-    color: '#64748b',
-    fontSize: '9px'
-  },
-  exerciseDetailsButton: {
-    marginTop: '10px',
-    border: '1px solid rgba(0, 224, 255, 0.35)',
-    borderRadius: '8px',
-    backgroundColor: 'transparent',
+  exerciseCategory: {
+    maxWidth: '100%',
+    marginBottom: '8px',
+    padding: '4px 8px',
+    overflow: 'hidden',
+    border: '1px solid rgba(0, 224, 255, 0.22)',
+    borderRadius: '999px',
+    backgroundColor: 'rgba(0, 224, 255, 0.08)',
     color: '#67e8f9',
-    padding: '7px 9px',
     fontSize: '10px',
     fontWeight: 700,
-    cursor: 'pointer'
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap'
+  },
+  exerciseName: {
+    width: '100%',
+    margin: '0 0 10px',
+    color: '#f8fafc',
+    fontSize: '16px',
+    fontWeight: 800,
+    lineHeight: 1.3
+  },
+  exerciseMeta: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+    marginBottom: '12px'
+  },
+  exerciseMetaTag: {
+    borderRadius: '6px',
+    backgroundColor: 'rgba(148, 163, 184, 0.1)',
+    padding: '4px 7px',
+    color: '#cbd5e1',
+    fontSize: '10px',
+    lineHeight: 1.2
+  },
+  exerciseEquipment: {
+    minHeight: '16px',
+    color: '#94a3b8',
+    fontSize: '11px'
+  },
+  exerciseDetailsButton: {
+    width: '100%',
+    marginTop: '16px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    border: '1px solid rgba(0, 224, 255, 0.3)',
+    borderRadius: '9px',
+    backgroundColor: 'rgba(0, 224, 255, 0.08)',
+    color: '#a5f3fc',
+    padding: '10px 12px',
+    fontSize: '12px',
+    fontWeight: 700,
+    cursor: 'pointer',
+    transition: 'background-color 140ms ease'
   },
   emptyState: {
     border: '1px dashed rgba(100, 116, 139, 0.35)',

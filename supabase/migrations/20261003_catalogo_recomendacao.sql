@@ -14,6 +14,9 @@ alter table public.exercises add column if not exists instructions jsonb not nul
 alter table public.exercises add column if not exists progressions text[] not null default '{}';
 alter table public.exercises add column if not exists regressions text[] not null default '{}';
 alter table public.exercises add column if not exists equipment_options text[] not null default '{}';
+alter table public.exercises add column if not exists description text;
+alter table public.exercises add column if not exists video_url text;
+alter table public.exercises add column if not exists demo_image_url text;
 
 create index if not exists idx_exercises_recommendation on public.exercises(category, difficulty, modality);
 

@@ -61,6 +61,7 @@ create table if not exists public.pesquisa (
   user_id uuid not null unique references public.usuarios(id) on delete cascade,
   objective text not null,
   training_preferences text[] not null default '{}',
+  training_days text[] not null default '{}',
   experience_level text not null,
   weekly_frequency text not null,
   available_time text not null,
@@ -96,11 +97,38 @@ create table if not exists public.user_subscriptions (
   user_id uuid not null references public.usuarios(id) on delete cascade,
   plan_id uuid not null references public.plans(id) on delete restrict,
   billing_cycle text not null check (billing_cycle in ('mensal', 'anual')),
-  status text not null default 'active' check (status in ('pending', 'active', 'canceled', 'trialing', 'past_due')),
+  status text not null default 'active' check (status in ('pending', 'active', 'canceled', 'trialing', 'past_due', 'expired', 'unpaid')),
   started_at timestamptz not null default now(),
   ends_at timestamptz,
+  provider text,
+  provider_subscription_id text,
+  renews_at timestamptz,
+  canceled_at timestamptz,
+  cancel_at_period_end boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+create unique index if not exists idx_user_subscriptions_provider_id
+  on public.user_subscriptions(provider, provider_subscription_id)
+  where provider is not null and provider_subscription_id is not null;
+
+create table if not exists public.artemis_free_usage (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  free_used_at timestamptz,
+  reservation_request_id uuid,
+  reservation_expires_at timestamptz,
+  last_request_id uuid,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint artemis_free_usage_reservation_check check (
+    (reservation_request_id is null and reservation_expires_at is null)
+    or (reservation_request_id is not null and reservation_expires_at is not null)
+  )
+);
+
+create index if not exists idx_artemis_free_usage_reservation_expiry
+  on public.artemis_free_usage(reservation_expires_at)
+  where reservation_expires_at is not null;
 
 -- =========================================================
 -- 4. Exercises library
@@ -111,7 +139,12 @@ create table if not exists public.exercises (
   category text not null,
   muscle_group text,
   equipment text,
+  equipment_options text[] not null default '{}',
   difficulty text not null default 'intermediario',
+  exercise_type text not null default 'composto' check (exercise_type in ('composto', 'isolado')),
+  suggested_sets smallint not null default 3 check (suggested_sets between 1 and 10),
+  suggested_reps text not null default '8-12',
+  active boolean not null default true,
   modality text not null default 'Academia',
   objectives text[] not null default '{}',
   muscles text[] not null default '{}',
@@ -126,6 +159,14 @@ create table if not exists public.exercises (
   demo_image_url text,
   created_at timestamptz not null default now()
 );
+
+alter table public.exercises add column if not exists equipment_options text[] not null default '{}';
+alter table public.exercises add column if not exists exercise_type text not null default 'composto';
+alter table public.exercises add column if not exists suggested_sets smallint not null default 3;
+alter table public.exercises add column if not exists suggested_reps text not null default '8-12';
+alter table public.exercises add column if not exists active boolean not null default true;
+
+create index if not exists idx_exercises_active_category on public.exercises(active, category);
 
 -- =========================================================
 -- 5. Workout templates
@@ -252,14 +293,17 @@ create trigger trg_usuarios_updated_at
 before update on public.usuarios
 for each row execute procedure public.update_updated_at_column();
 
+drop trigger if exists trg_user_settings_updated_at on public.user_settings;
 create trigger trg_user_settings_updated_at
 before update on public.user_settings
 for each row execute procedure public.update_updated_at_column();
 
+drop trigger if exists trg_user_goals_updated_at on public.user_goals;
 create trigger trg_user_goals_updated_at
 before update on public.user_goals
 for each row execute procedure public.update_updated_at_column();
 
+drop trigger if exists trg_pesquisa_updated_at on public.pesquisa;
 create trigger trg_pesquisa_updated_at
 before update on public.pesquisa
 for each row execute procedure public.update_updated_at_column();
@@ -287,6 +331,169 @@ create trigger on_auth_user_created
 after insert on auth.users
 for each row execute procedure public.handle_new_user();
 
+create or replace function public.artemis_check_access(p_user_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  usage_row public.artemis_free_usage%rowtype;
+  has_premium boolean;
+  is_reserved boolean;
+begin
+  select exists (
+    select 1
+    from public.user_subscriptions subscription
+    where subscription.user_id = p_user_id
+      and subscription.status in ('active', 'trialing')
+      and subscription.started_at <= now()
+      and subscription.ends_at > now()
+  ) into has_premium;
+
+  select * into usage_row
+  from public.artemis_free_usage
+  where user_id = p_user_id;
+
+  is_reserved := coalesce(usage_row.reservation_expires_at > now(), false);
+
+  return jsonb_build_object(
+    'premium', has_premium,
+    'free_available', not has_premium
+      and usage_row.free_used_at is null
+      and not is_reserved,
+    'free_in_progress', not has_premium and is_reserved,
+    'requires_subscription', not has_premium and usage_row.free_used_at is not null
+  );
+end;
+$$;
+
+create or replace function public.artemis_reserve_access(p_user_id uuid, p_request_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  usage_row public.artemis_free_usage%rowtype;
+begin
+  if p_user_id is null or p_request_id is null then
+    raise exception 'User and request identifiers are required';
+  end if;
+
+  if exists (
+    select 1
+    from public.user_subscriptions subscription
+    where subscription.user_id = p_user_id
+      and subscription.status in ('active', 'trialing')
+      and subscription.started_at <= now()
+      and subscription.ends_at > now()
+  ) then
+    return jsonb_build_object('status', 'premium');
+  end if;
+
+  insert into public.artemis_free_usage (user_id)
+  values (p_user_id)
+  on conflict (user_id) do nothing;
+
+  select * into usage_row
+  from public.artemis_free_usage
+  where user_id = p_user_id
+  for update;
+
+  if usage_row.free_used_at is not null then
+    return jsonb_build_object('status', 'subscription_required');
+  end if;
+
+  if usage_row.reservation_expires_at > now() then
+    return jsonb_build_object('status', 'in_progress');
+  end if;
+
+  update public.artemis_free_usage
+  set reservation_request_id = p_request_id,
+      reservation_expires_at = now() + interval '10 minutes',
+      updated_at = now()
+  where user_id = p_user_id;
+
+  return jsonb_build_object('status', 'free');
+end;
+$$;
+
+create or replace function public.artemis_complete_free_usage(p_user_id uuid, p_request_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if exists (
+    select 1
+    from public.user_subscriptions subscription
+    where subscription.user_id = p_user_id
+      and subscription.status in ('active', 'trialing')
+      and subscription.started_at <= now()
+      and subscription.ends_at > now()
+  ) then
+    update public.artemis_free_usage
+    set reservation_request_id = null,
+        reservation_expires_at = null,
+        updated_at = now()
+    where user_id = p_user_id
+      and reservation_request_id = p_request_id
+      and free_used_at is null;
+
+    return jsonb_build_object('status', 'premium');
+  end if;
+
+  update public.artemis_free_usage
+  set free_used_at = now(),
+      last_request_id = p_request_id,
+      reservation_request_id = null,
+      reservation_expires_at = null,
+      updated_at = now()
+  where user_id = p_user_id
+    and reservation_request_id = p_request_id
+    and reservation_expires_at > now()
+    and free_used_at is null;
+
+  if found then
+    return jsonb_build_object('status', 'completed');
+  end if;
+
+  if exists (
+    select 1
+    from public.artemis_free_usage
+    where user_id = p_user_id
+      and free_used_at is not null
+      and last_request_id = p_request_id
+  ) then
+    return jsonb_build_object('status', 'completed');
+  end if;
+
+  return jsonb_build_object('status', 'reservation_lost');
+end;
+$$;
+
+create or replace function public.artemis_release_free_usage(p_user_id uuid, p_request_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  update public.artemis_free_usage
+  set reservation_request_id = null,
+      reservation_expires_at = null,
+      updated_at = now()
+  where user_id = p_user_id
+    and reservation_request_id = p_request_id
+    and free_used_at is null;
+
+  return found;
+end;
+$$;
+
 -- =========================================================
 -- 11. RLS
 -- =========================================================
@@ -296,6 +503,7 @@ alter table public.user_goals enable row level security;
 alter table public.pesquisa enable row level security;
 alter table public.plans enable row level security;
 alter table public.user_subscriptions enable row level security;
+alter table public.artemis_free_usage enable row level security;
 alter table public.exercises enable row level security;
 alter table public.workout_templates enable row level security;
 alter table public.workout_template_exercises enable row level security;
@@ -315,15 +523,19 @@ drop policy if exists usuarios_update_own on public.usuarios;
 create policy "usuarios_update_own" on public.usuarios
 for update using (auth.uid() = id) with check (auth.uid() = id);
 
+drop policy if exists settings_select_own on public.user_settings;
 create policy "settings_select_own" on public.user_settings
 for select using (auth.uid() = user_id);
 
+drop policy if exists settings_update_own on public.user_settings;
 create policy "settings_update_own" on public.user_settings
 for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists goals_manage_own on public.user_goals;
 create policy "goals_manage_own" on public.user_goals
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists pesquisa_manage_own on public.pesquisa;
 create policy "pesquisa_manage_own" on public.pesquisa
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -341,15 +553,36 @@ create policy subscriptions_update_pending on public.user_subscriptions
 for update using (auth.uid() = user_id and status = 'pending')
 with check (auth.uid() = user_id and status in ('pending', 'canceled'));
 
+revoke all on public.artemis_free_usage from anon, authenticated;
+grant all on public.artemis_free_usage to service_role;
+revoke all on function public.artemis_check_access(uuid) from public, anon, authenticated;
+revoke all on function public.artemis_reserve_access(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.artemis_complete_free_usage(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.artemis_release_free_usage(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.artemis_check_access(uuid) to service_role;
+grant execute on function public.artemis_reserve_access(uuid, uuid) to service_role;
+grant execute on function public.artemis_complete_free_usage(uuid, uuid) to service_role;
+grant execute on function public.artemis_release_free_usage(uuid, uuid) to service_role;
+
+drop policy if exists plans_read_all on public.plans;
 create policy "plans_read_all" on public.plans
 for select using (auth.role() = 'authenticated');
 
+drop policy if exists exercises_read_all on public.exercises;
 create policy "exercises_read_all" on public.exercises
 for select using (auth.role() = 'authenticated');
 
+insert into storage.buckets (id, name, public, allowed_mime_types)
+values ('exercise-videos', 'exercise-videos', true, array['video/mp4'])
+on conflict (id) do update
+set public = excluded.public,
+    allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists workout_templates_manage_own on public.workout_templates;
 create policy "workout_templates_manage_own" on public.workout_templates
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists workout_template_exercises_manage_own on public.workout_template_exercises;
 create policy "workout_template_exercises_manage_own" on public.workout_template_exercises
 for all using (
   exists (
@@ -365,9 +598,11 @@ for all using (
   )
 );
 
+drop policy if exists workout_sessions_manage_own on public.workout_sessions;
 create policy "workout_sessions_manage_own" on public.workout_sessions
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists workout_session_exercises_manage_own on public.workout_session_exercises;
 create policy "workout_session_exercises_manage_own" on public.workout_session_exercises
 for all using (
   exists (
@@ -383,12 +618,15 @@ for all using (
   )
 );
 
+drop policy if exists progress_manage_own on public.progress_metrics;
 create policy "progress_manage_own" on public.progress_metrics
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists notifications_manage_own on public.notifications;
 create policy "notifications_manage_own" on public.notifications
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists artemis_messages_manage_own on public.artemis_messages;
 create policy "artemis_messages_manage_own" on public.artemis_messages
 for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
@@ -429,15 +667,29 @@ values
   )
  on conflict do nothing;
 
-insert into public.exercises (id, name, category, muscle_group, equipment, difficulty, description)
-values
-  (gen_random_uuid(), 'Supino reto', 'Peito', 'Peito', 'Barra', 'Intermediário', 'Exercício clássico para desenvolvimento do peitoral e força pressora.'),
-  (gen_random_uuid(), 'Agachamento livre', 'Pernas', 'Quadríceps', 'Barra', 'Intermediário', 'Movimento principal para força e desenvolvimento das pernas.'),
-  (gen_random_uuid(), 'Levantamento terra', 'Costas', 'Costas', 'Barra', 'Avançado', 'Fundamental para força total e ganho de massa muscular.'),
-  (gen_random_uuid(), 'Remada curvada', 'Costas', 'Costas', 'Halter', 'Intermediário', 'Trabalha costas, ombros e braço de forma funcional.'),
-  (gen_random_uuid(), 'Rosca direta', 'Braços', 'Bíceps', 'Barra', 'Iniciante', 'Exercício clássico para bíceps e antebraço.'),
-  (gen_random_uuid(), 'Prancha', 'Core', 'Abdômen', 'Peso corporal', 'Iniciante', 'Excelente para estabilidade, core e postura.')
- on conflict do nothing;
+insert into public.exercises (
+  id, name, category, muscle_group, equipment, equipment_options, difficulty,
+  exercise_type, suggested_sets, suggested_reps, active, modality, objectives,
+  muscles, movement_pattern, unilateral, impact_level, instructions, description
+)
+select
+  gen_random_uuid(), seed.name, seed.category, seed.muscle_group, seed.equipment,
+  seed.equipment_options, seed.difficulty, seed.exercise_type, seed.suggested_sets,
+  seed.suggested_reps, true, 'Academia', seed.objectives, seed.muscles,
+  seed.movement_pattern, false, 'baixo', '[]'::jsonb, seed.description
+from (values
+  ('Supino reto com barra', 'Peito', 'Peito', 'Barra e banco', array['barra', 'banco']::text[], 'Intermediário', 'composto', 3::smallint, '6-10', array['hipertrofia', 'forca']::text[], array['peitoral', 'triceps', 'deltoides anterior']::text[], 'Empurrar horizontal', 'Exercício composto para peitoral, tríceps e deltoide anterior.'),
+  ('Agachamento livre', 'Quadríceps', 'Quadríceps', 'Barra e rack', array['barra', 'rack']::text[], 'Intermediário', 'composto', 3::smallint, '6-10', array['hipertrofia', 'forca']::text[], array['quadriceps', 'gluteos', 'posteriores']::text[], 'Agachar', 'Exercício composto para membros inferiores.'),
+  ('Levantamento terra romeno', 'Posterior de coxa', 'Posterior de coxa', 'Barra', array['barra']::text[], 'Intermediário', 'composto', 3::smallint, '8-12', array['hipertrofia', 'forca']::text[], array['posteriores', 'gluteos', 'eretores da espinha']::text[], 'Hinge', 'Exercício composto com ênfase em posteriores de coxa e glúteos.'),
+  ('Remada curvada com barra', 'Costas', 'Costas', 'Barra', array['barra']::text[], 'Intermediário', 'composto', 3::smallint, '8-12', array['hipertrofia', 'forca']::text[], array['dorsais', 'romboides', 'trapezio', 'biceps']::text[], 'Puxar horizontal', 'Exercício composto para costas e bíceps.'),
+  ('Rosca direta com barra', 'Bíceps', 'Bíceps', 'Barra', array['barra']::text[], 'Iniciante', 'isolado', 3::smallint, '8-12', array['hipertrofia']::text[], array['biceps', 'antebracos']::text[], 'Flexão de cotovelo', 'Exercício isolado para bíceps.'),
+  ('Prancha', 'Abdômen', 'Abdômen', 'Peso corporal e colchonete', array['peso corporal', 'colchonete']::text[], 'Iniciante', 'isolado', 3::smallint, '20-60 segundos', array['resistencia', 'estabilidade']::text[], array['abdomen', 'obliquos']::text[], 'Anti-extensão isométrica', 'Isometria para estabilidade do tronco; tempo é uma sugestão ajustável.')
+) as seed(name, category, muscle_group, equipment, equipment_options, difficulty, exercise_type, suggested_sets, suggested_reps, objectives, muscles, movement_pattern, description)
+where not exists (
+  select 1 from public.exercises existing
+  where lower(trim(existing.name)) = lower(trim(seed.name))
+)
+on conflict do nothing;
 
 -- =========================================================
 -- 13. Notes

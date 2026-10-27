@@ -2,27 +2,34 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Navbar from './Navbar';
 import ArtemisChat from './ArtemisChat';
-import { askArtemis } from '../services/artemisApi';
+import { askArtemis, getArtemisAccess } from '../services/artemisApi';
 import { findExerciseByName, loadAiWorkout, readAiWorkout, saveAiWorkout } from '../services/aiWorkoutStorage';
 import { supabase } from '../lib/supabase';
+import { defaultSchedule, trainingDayIndexes, weekDays } from '../utils/trainingDays';
 
 const trainingOptions = ['Musculação', 'Funcional', 'HIIT', 'Cardio', 'Mobilidade', 'Esportes'];
-const weekDays = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
-const exerciseCatalogFields = 'id, name, category, muscle_group, equipment, difficulty, modality, objectives, muscles, movement_pattern, unilateral, impact_level, description';
+const exerciseCatalogFields = 'id, name, category, muscle_group, equipment, difficulty, exercise_type, suggested_sets, suggested_reps, modality, objectives, muscles, movement_pattern, unilateral, impact_level, description';
 
 function sessionsPerWeek(frequency = '') {
   const match = String(frequency).match(/^(\d+)/);
   return match ? Number(match[1]) : 0;
 }
 
-function defaultSchedule(count) {
-  const schedules = { 1: [2], 2: [0, 3], 3: [0, 2, 4], 4: [0, 1, 3, 5], 5: [0, 1, 2, 4, 5], 6: [0, 1, 2, 3, 4, 5], 7: [0, 1, 2, 3, 4, 5, 6] };
-  return schedules[count] || [];
+function frequencyForSessions(count) {
+  return count ? `${count} ${count === 1 ? 'vez' : 'vezes'} por semana` : '';
 }
 
 function parseWorkoutPlan(response) {
   const jsonText = response.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  const plan = JSON.parse(jsonText);
+  let plan;
+  try {
+    plan = JSON.parse(jsonText);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error('A resposta da Artemis veio incompleta ou inválida. Tente gerar o treino novamente.');
+    }
+    throw error;
+  }
   if (!Array.isArray(plan.days) || !plan.days.length) throw new Error('A Artemis não organizou os treinos por dia. Gere novamente.');
   for (const day of plan.days) {
     if (!day.title || !Array.isArray(day.exercises) || !day.exercises.length) {
@@ -70,14 +77,43 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
   const [isGeneratingWorkout, setIsGeneratingWorkout] = useState(false);
   const [exerciseCatalog, setExerciseCatalog] = useState([]);
-  const [selectedTrainingDays, setSelectedTrainingDays] = useState(() => defaultSchedule(sessionsPerWeek(pesquisa?.weekly_frequency)));
+  const [artemisAccess, setArtemisAccess] = useState({ status: 'loading' });
+  const [selectedTrainingDays, setSelectedTrainingDays] = useState(() => {
+    const savedDays = trainingDayIndexes(pesquisa?.training_days);
+    return savedDays.length === sessionsPerWeek(pesquisa?.weekly_frequency)
+      ? savedDays
+      : defaultSchedule(sessionsPerWeek(pesquisa?.weekly_frequency));
+  });
 
   useEffect(() => {
     let isActive = true;
 
+    getArtemisAccess()
+      .then((access) => {
+        if (!isActive) return;
+        if (typeof access?.premium !== 'boolean'
+          || typeof access?.free_available !== 'boolean'
+          || typeof access?.free_in_progress !== 'boolean'
+          || typeof access?.requires_subscription !== 'boolean') {
+          throw new Error('Não foi possível interpretar o estado da sua assinatura.');
+        }
+        setArtemisAccess({
+          ...access,
+          status: access.premium ? 'premium'
+            : access.requires_subscription ? 'required'
+              : access.free_in_progress ? 'busy'
+                : access.free_available ? 'free'
+                  : 'error',
+        });
+      })
+      .catch((error) => {
+        if (isActive) setArtemisAccess({ status: 'error', error: error.message });
+      });
+
     supabase
       .from('exercises')
       .select(exerciseCatalogFields)
+      .eq('active', true)
       .order('name')
       .then(({ data, error }) => {
         if (!isActive) return;
@@ -101,16 +137,59 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
     };
   }, [userId]);
 
+  const refreshArtemisAccess = async () => {
+    try {
+      const access = await getArtemisAccess();
+      if (typeof access?.premium !== 'boolean'
+        || typeof access?.free_available !== 'boolean'
+        || typeof access?.free_in_progress !== 'boolean'
+        || typeof access?.requires_subscription !== 'boolean') {
+        throw new Error('Não foi possível interpretar o estado da sua assinatura.');
+      }
+      setArtemisAccess({
+        ...access,
+        status: access.premium ? 'premium'
+          : access.requires_subscription ? 'required'
+            : access.free_in_progress ? 'busy'
+              : access.free_available ? 'free'
+                : 'error',
+      });
+    } catch (error) {
+      setArtemisAccess({ status: 'error', error: error.message });
+    }
+  };
+
   const updatePreference = (field, value) => {
     setPreferences((current) => ({ ...current, [field]: value }));
     if (field === 'weekly_frequency') setSelectedTrainingDays(defaultSchedule(sessionsPerWeek(value)));
     setPreferencesError('');
   };
 
+  const toggleTrainingDay = (dayIndex) => {
+    const nextDays = selectedTrainingDays.includes(dayIndex)
+      ? selectedTrainingDays.filter((index) => index !== dayIndex)
+      : [...selectedTrainingDays, dayIndex].sort((first, second) => first - second);
+    setSelectedTrainingDays(nextDays);
+    setPreferences((current) => ({
+      ...current,
+      weekly_frequency: frequencyForSessions(nextDays.length),
+    }));
+    setPreferencesError('');
+  };
+
   const persistPreferences = async () => {
     setPreferencesError('');
+    if (selectedTrainingDays.length === 0) {
+      setPreferencesError('Selecione pelo menos um dia de treino.');
+      return null;
+    }
     if (!preferences.objective || !preferences.experience_level || !preferences.weekly_frequency || !preferences.available_time || !preferences.training_location || !preferences.equipment) {
       setPreferencesError('Preencha as preferências obrigatórias antes de salvar.');
+      return null;
+    }
+    const sessionCount = sessionsPerWeek(preferences.weekly_frequency);
+    if (selectedTrainingDays.length !== sessionCount) {
+      setPreferencesError(`Selecione ${sessionCount} ${sessionCount === 1 ? 'dia' : 'dias'} para sua frequência semanal.`);
       return null;
     }
 
@@ -124,6 +203,7 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
           training_preferences: preferences.training_preferences,
           experience_level: preferences.experience_level,
           weekly_frequency: preferences.weekly_frequency,
+          training_days: [...selectedTrainingDays].sort((first, second) => first - second).map((index) => weekDays[index]),
           available_time: preferences.available_time,
           training_location: preferences.training_location,
           equipment: preferences.equipment,
@@ -154,11 +234,6 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
   };
 
   const handleGenerateWorkout = async () => {
-    const sessionCount = sessionsPerWeek(preferences.weekly_frequency);
-    if (selectedTrainingDays.length !== sessionCount) {
-      setWorkoutError(`Selecione ${sessionCount} ${sessionCount === 1 ? 'dia' : 'dias'} para sua frequência semanal.`);
-      return;
-    }
     const savedPreferences = await persistPreferences();
     if (!savedPreferences) {
       return;
@@ -166,7 +241,11 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
 
     let catalog = exerciseCatalog;
     if (!catalog.length) {
-      const { data, error } = await supabase.from('exercises').select(exerciseCatalogFields).order('name');
+      const { data, error } = await supabase
+        .from('exercises')
+        .select(exerciseCatalogFields)
+        .eq('active', true)
+        .order('name');
       if (error) {
         setWorkoutError('Não foi possível carregar o catálogo de exercícios. Tente novamente.');
         return;
@@ -182,6 +261,7 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
     setWorkoutError('');
     setIsGeneratingWorkout(true);
 
+    let responseGenerated = false;
     try {
       const catalogForPrompt = catalog.map((exercise) => ({
         id: exercise.id,
@@ -190,6 +270,9 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
         grupo_muscular: exercise.muscle_group,
         equipamento: exercise.equipment,
         dificuldade: exercise.difficulty,
+        tipo: exercise.exercise_type,
+        series_sugeridas: exercise.suggested_sets,
+        repeticoes_sugeridas: exercise.suggested_reps,
         modalidade: exercise.modality,
         objetivos: exercise.objectives,
         musculos: exercise.muscles,
@@ -210,10 +293,19 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
         `Dias escolhidos: ${[...selectedTrainingDays].sort((a, b) => a - b).map((index) => weekDays[index]).join(', ')}.`,
         `Catálogo real da tabela exercises da MotionFit. Cada opção é um registro cadastrado: ${JSON.stringify(catalogForPrompt)}`,
         'Use exclusivamente exercícios presentes no catálogo. Não invente exercícios, IDs ou nomes. Copie o id do registro para exercise_id e o nome correspondente para name.',
+        'As séries e repetições sugeridas no catálogo são referências ajustáveis: adapte-as ao objetivo, experiência e tempo disponível, sem tratá-las como regras universais.',
         `Exemplo de exercício válido: ${JSON.stringify({ exercise_id: exampleExercise.id, name: exampleExercise.nome, sets: 3, reps: '8-12', rest_seconds: 60 })}.`,
         `Responda somente com JSON válido neste formato: {"days":[{"weekday":"Seg","title":"Nome do treino","duration_min":45,"exercises":[{"exercise_id":"UUID real listado no catálogo","name":"Nome exato listado no catálogo","sets":3,"reps":"8-12","rest_seconds":60}]}]}. Inclua exatamente um objeto para cada dia escolhido, mantenha os nomes dos dias exatamente como informados, e inclua pelo menos 3 exercícios em cada dia. Não use markdown nem texto fora do JSON.`,
       ].join('\n');
-      const response = await askArtemis(prompt, [], { responseFormat: 'json' });
+      const orderedDays = [...selectedTrainingDays].sort((first, second) => first - second);
+      const response = await askArtemis(prompt, [], {
+        responseFormat: 'json',
+        validation: {
+          exercise_ids: catalog.map((exercise) => exercise.id),
+          weekdays: orderedDays.map((dayIndex) => weekDays[dayIndex]),
+        },
+      });
+      responseGenerated = true;
       const plan = parseWorkoutPlan(response);
       const linkedPlan = {
         ...plan,
@@ -286,10 +378,52 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
       }
     } catch (error) {
       setWorkoutError(error.message || 'Não foi possível gerar o treino. Tente novamente.');
+      if (error.code === 'subscription_required') void refreshArtemisAccess();
     } finally {
+      if (responseGenerated) void refreshArtemisAccess();
       setIsGeneratingWorkout(false);
     }
   };
+
+  if (artemisAccess.status === 'loading') {
+    return (
+      <div style={styles.appContainer}>
+        <Navbar onOpenNotif={onOpenNotif} onOpenConfig={onOpenConfig} />
+        <main className="ia-dashboard" style={{ ...styles.dashboardGrid, gridTemplateColumns: 'minmax(0, 1fr)' }}>
+          <section style={styles.sectionCard} role="status" aria-live="polite">
+            <h1 style={styles.heroTitle}>Verificando seu acesso à Artemis...</h1>
+            <p style={styles.heroDesc}>Aguarde enquanto confirmamos sua gratuidade ou assinatura.</p>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (artemisAccess.status === 'required') {
+    return (
+      <div style={styles.appContainer}>
+        <Navbar onOpenNotif={onOpenNotif} onOpenConfig={onOpenConfig} />
+        <main className="ia-dashboard" style={{ ...styles.dashboardGrid, gridTemplateColumns: 'minmax(0, 1fr)' }}>
+          <section style={styles.sectionCard} aria-labelledby="artemis-premium-title">
+            <span style={styles.heroTag}>— ACESSO PREMIUM</span>
+            <h1 id="artemis-premium-title" style={styles.heroTitle}>Sua utilização gratuita já foi usada</h1>
+            <p style={styles.heroDesc}>Para continuar conversando com a Artemis ou gerar novos treinos, conheça os planos disponíveis. Seu histórico e seus treinos salvos continuam preservados.</p>
+            {workout && (
+              <div style={{ ...styles.sectionCard, marginTop: '20px' }}>
+                <h2 style={styles.stepTitleText}>ÚLTIMO TREINO GERADO</h2>
+                <p style={{ color: '#dbe4f0', lineHeight: 1.7, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{workout}</p>
+              </div>
+            )}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', margin: '20px 0' }}>
+              <Link to="/planos" style={styles.generateButton}>Conhecer os planos</Link>
+              <button type="button" style={styles.savePreferencesButton} onClick={() => void refreshArtemisAccess()}>Verificar meu acesso novamente</button>
+            </div>
+            <ArtemisChat userId={userId} exerciseCatalog={exerciseCatalog} disabled onAccessChanged={() => {}} />
+          </section>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.appContainer}>
@@ -311,8 +445,30 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
                 <span style={styles.heroGradient}>INTELIGÊNCIA ARTIFICIAL.</span>
               </h1>
               <p style={styles.heroDesc}>
-                A IA analisa seus dados, objetivos e movimentos para criar um treino totalmente personalizado para você.
+                A IA usa seus dados e preferências para criar um treino personalizado para você.
               </p>
+              {artemisAccess.status === 'free' && (
+                <p role="status" style={{ color: '#a5f3fc', fontSize: '13px', fontWeight: 700 }}>
+                  Você tem uma utilização gratuita da Artemis nesta conta.
+                </p>
+              )}
+              {artemisAccess.status === 'premium' && (
+                <p role="status" style={{ color: '#a5f3fc', fontSize: '13px', fontWeight: 700 }}>
+                  Seu acesso premium à Artemis está ativo.
+                </p>
+              )}
+              {artemisAccess.status === 'busy' && (
+                <p role="status" style={{ color: '#fde68a', fontSize: '13px', fontWeight: 700 }}>
+                  Uma interação da Artemis já está em andamento nesta conta. Aguarde ou verifique o acesso novamente.
+                  <button type="button" onClick={() => void refreshArtemisAccess()} style={styles.savePreferencesButton}>Verificar novamente</button>
+                </p>
+              )}
+              {artemisAccess.status === 'error' && (
+                <p role="alert" style={{ color: '#fde68a', fontSize: '13px' }}>
+                  {artemisAccess.error || 'Não foi possível verificar o acesso agora. O servidor continuará validando sua autorização antes de cada resposta.'}
+                  <button type="button" onClick={() => void refreshArtemisAccess()} style={styles.savePreferencesButton}>Tentar novamente</button>
+                </p>
+              )}
 
               <div style={styles.heroFeatures}>
                 <div style={styles.featureBadge}>
@@ -327,7 +483,7 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
                   <span style={styles.featureIcon}>🛡️</span>
                   <div>
                     <div style={styles.featureTitle}>Seguro</div>
-                    <div style={styles.featureSub}>Com base na sua análise</div>
+                    <div style={styles.featureSub}>Com base nas suas preferências</div>
                   </div>
                 </div>
 
@@ -340,24 +496,14 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
                 </div>
               </div>
             </div>
-
-            {/* Espaço para Imagem / Avatar 3D Superior */}
-            <div style={styles.avatarBox}>
-              <div style={styles.cornerTL} />
-              <div style={styles.cornerTR} />
-              <div style={styles.cornerBL} />
-              <div style={styles.cornerBR} />
-              <div style={styles.avatarPlaceholderContent}>
-                <svg style={{ width: '36px', height: '36px', color: '#00e0ff', marginBottom: '6px' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-                <span style={{ color: '#00e0ff', fontSize: '12px', fontWeight: 600 }}>Espaço para imagem</span>
-                <span style={{ color: '#64748b', fontSize: '10px' }}>(vídeo ou captura do movimento)</span>
-              </div>
-            </div>
           </div>
 
-          <ArtemisChat userId={userId} exerciseCatalog={exerciseCatalog} />
+          <ArtemisChat
+            userId={userId}
+            exerciseCatalog={exerciseCatalog}
+            disabled={artemisAccess.status === 'busy' || isGeneratingWorkout}
+            onAccessChanged={refreshArtemisAccess}
+          />
 
           {/* Passo 1: Informe seus dados (Selects em linha) */}
           <div style={styles.sectionCard}>
@@ -457,11 +603,11 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
             </fieldset>
 
             <fieldset style={styles.trainingPreferences}>
-              <legend style={styles.inputLabel}>Dias da agenda ({selectedTrainingDays.length}/{sessionsPerWeek(preferences.weekly_frequency) || 0})</legend>
+              <legend style={styles.inputLabel}>Dias de treino ({selectedTrainingDays.length}/7)</legend>
               <div className="ia-training-options">
                 {weekDays.map((day, index) => {
                   const isSelected = selectedTrainingDays.includes(index);
-                  return <button key={day} type="button" aria-pressed={isSelected} onClick={() => setSelectedTrainingDays((current) => isSelected ? current.filter((item) => item !== index) : [...current, index].sort((first, second) => first - second))} style={{ ...styles.optionPill, ...(isSelected ? styles.optionPillActive : {}) }}>{day}</button>;
+                  return <button key={day} type="button" aria-pressed={isSelected} onClick={() => toggleTrainingDay(index)} style={{ ...styles.trainingDayButton, ...(isSelected ? styles.trainingDayButtonActive : {}) }}>{day}</button>;
                 })}
               </div>
             </fieldset>
@@ -484,7 +630,7 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
                 type="button"
                 style={styles.generateButton}
                 onClick={handleGenerateWorkout}
-                disabled={isGeneratingWorkout || isSavingPreferences}
+                disabled={isGeneratingWorkout || isSavingPreferences || artemisAccess.status === 'busy'}
                 aria-busy={isGeneratingWorkout}
               >
                 <svg style={{ width: '18px', height: '18px' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -692,7 +838,7 @@ const styles = {
     borderRadius: '16px',
     padding: '24px',
     display: 'grid',
-    gridTemplateColumns: '1.3fr 1fr',
+    gridTemplateColumns: 'minmax(0, 1fr)',
     gap: '20px',
     alignItems: 'center',
     boxShadow: '0 8px 32px rgba(0,0,0,0.4)'
@@ -752,28 +898,6 @@ const styles = {
     fontSize: '8px',
     color: '#64748b'
   },
-  avatarBox: {
-    position: 'relative',
-    height: '140px',
-    backgroundColor: '#04060b',
-    borderRadius: '12px',
-    border: '1px dashed rgba(0, 162, 255, 0.4)',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  avatarPlaceholderContent: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center'
-  },
-  cornerTL: { position: 'absolute', top: 4, left: 4, width: 6, height: 6, borderTop: '2px solid #00e0ff', borderLeft: '2px solid #00e0ff' },
-  cornerTR: { position: 'absolute', top: 4, right: 4, width: 6, height: 6, borderTop: '2px solid #00e0ff', borderRight: '2px solid #00e0ff' },
-  cornerBL: { position: 'absolute', bottom: 4, left: 4, width: 6, height: 6, borderBottom: '2px solid #00e0ff', borderLeft: '2px solid #00e0ff' },
-  cornerBR: { position: 'absolute', bottom: 4, right: 4, width: 6, height: 6, borderBottom: '2px solid #00e0ff', borderRight: '2px solid #00e0ff' },
-
   sectionCard: {
     backgroundColor: '#070913',
     border: '1px solid rgba(0, 100, 200, 0.25)',
@@ -832,6 +956,27 @@ const styles = {
     margin: '18px 0 0',
     padding: 0,
     border: 0,
+  },
+  trainingDayButton: {
+    minWidth: '44px',
+    minHeight: '40px',
+    padding: '8px 12px',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: 'rgba(148, 163, 184, 0.35)',
+    borderRadius: '8px',
+    backgroundColor: '#0b0e1b',
+    color: '#cbd5e1',
+    fontSize: '13px',
+    fontWeight: 700,
+    cursor: 'pointer',
+    transition: 'background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease',
+  },
+  trainingDayButtonActive: {
+    borderColor: '#00e0ff',
+    backgroundColor: '#00e0ff',
+    color: '#082f36',
+    boxShadow: '0 0 0 2px rgba(0, 224, 255, 0.2)',
   },
   trainingOption: {
     display: 'flex',

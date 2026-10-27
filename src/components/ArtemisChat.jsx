@@ -72,7 +72,12 @@ const initialMessages = [
   },
 ];
 
-export default function ArtemisChat({ userId, exerciseCatalog = [] }) {
+export default function ArtemisChat({
+  userId,
+  exerciseCatalog = [],
+  disabled = false,
+  onAccessChanged = () => {},
+}) {
   const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -104,7 +109,7 @@ export default function ArtemisChat({ userId, exerciseCatalog = [] }) {
   const handleSubmit = async (event) => {
     event.preventDefault();
     const pergunta = question.trim();
-    if (!pergunta || isLoading || isLoadingHistory) return;
+    if (!pergunta || isLoading || isLoadingHistory || disabled) return;
     const recentContext = messages.slice(-6).map((message) => message.content).join(' ');
     const includeCatalog = exerciseTopicPattern.test(`${recentContext} ${pergunta}`);
     if (includeCatalog && !exerciseCatalog.length) {
@@ -150,7 +155,9 @@ export default function ArtemisChat({ userId, exerciseCatalog = [] }) {
           ].join('\n')
         : '';
       const perguntaParaArtemis = catalogContext ? `${pergunta}\n\n${catalogContext}` : pergunta;
-      const resposta = await askArtemis(perguntaParaArtemis, historico);
+      const resposta = await askArtemis(perguntaParaArtemis, historico, {
+        responseFormat: includeCatalog ? 'catalog' : 'text',
+      });
       if (includeCatalog && /\[\[exercicio:[^\]]*$/.test(resposta.trim())) {
         throw new Error('A resposta da Artemis chegou incompleta. Tente enviar a pergunta novamente.');
       }
@@ -167,10 +174,12 @@ export default function ArtemisChat({ userId, exerciseCatalog = [] }) {
         setErrorMessage('A Artemis respondeu, mas não foi possível salvar a resposta na sua conta.');
         setHasError(true);
       }
+      onAccessChanged();
     } catch (error) {
       setMessages((currentMessages) => currentMessages.filter((message) => message.id !== temporaryId));
       setErrorMessage(error.message || 'Não foi possível salvar sua pergunta ou conectar com a Artemis. Tente novamente.');
       setHasError(true);
+      if (error.code === 'subscription_required') onAccessChanged();
     } finally {
       setIsLoading(false);
     }
@@ -231,10 +240,10 @@ export default function ArtemisChat({ userId, exerciseCatalog = [] }) {
               event.currentTarget.form.requestSubmit();
             }
           }}
-          disabled={isLoading || isLoadingHistory}
+          disabled={disabled || isLoading || isLoadingHistory}
           rows={2}
         />
-        <button className="artemis-chat__send" type="submit" disabled={isLoading || isLoadingHistory || !question.trim()}>
+        <button className="artemis-chat__send" type="submit" disabled={disabled || isLoading || isLoadingHistory || !question.trim()}>
           {isLoading ? 'Enviando...' : 'Enviar'}
           <span aria-hidden="true">→</span>
         </button>
