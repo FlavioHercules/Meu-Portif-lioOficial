@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { createWorkoutReminders } from '../services/notifications';
 
-const notificationCategories = ['Todas', 'Treinos', 'Planos', 'Sistema'];
+const notificationCategories = ['Todas', 'Treinos', 'Sistema'];
 
 function formatNotificationDate(value) {
   if (!value) return '';
@@ -310,7 +310,7 @@ const styles = {
     transition: 'all 0.2s ease'
   },
   unreadNotification: {
-    borderColor: 'rgba(0, 224, 255, 0.4)',
+    border: '1px solid rgba(0, 224, 255, 0.4)',
     backgroundColor: 'rgba(0, 224, 255, 0.06)'
   },
   unreadDot: {

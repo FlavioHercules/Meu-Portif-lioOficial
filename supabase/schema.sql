@@ -78,7 +78,7 @@ create table if not exists public.pesquisa (
 );
 
 -- =========================================================
--- 3. Plans and subscriptions
+-- 3. Legacy billing records (retained only for compatibility)
 -- =========================================================
 create table if not exists public.plans (
   id uuid primary key default gen_random_uuid(),
@@ -338,33 +338,13 @@ stable
 security definer
 set search_path = public, pg_temp
 as $$
-declare
-  usage_row public.artemis_free_usage%rowtype;
-  has_premium boolean;
-  is_reserved boolean;
 begin
-  select exists (
-    select 1
-    from public.user_subscriptions subscription
-    where subscription.user_id = p_user_id
-      and subscription.status in ('active', 'trialing')
-      and subscription.started_at <= now()
-      and subscription.ends_at > now()
-  ) into has_premium;
-
-  select * into usage_row
-  from public.artemis_free_usage
-  where user_id = p_user_id;
-
-  is_reserved := coalesce(usage_row.reservation_expires_at > now(), false);
-
   return jsonb_build_object(
-    'premium', has_premium,
-    'free_available', not has_premium
-      and usage_row.free_used_at is null
-      and not is_reserved,
-    'free_in_progress', not has_premium and is_reserved,
-    'requires_subscription', not has_premium and usage_row.free_used_at is not null
+    'available', true,
+    'premium', false,
+    'free_available', true,
+    'free_in_progress', false,
+    'requires_subscription', false
   );
 end;
 $$;
@@ -375,46 +355,10 @@ language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
-declare
-  usage_row public.artemis_free_usage%rowtype;
 begin
   if p_user_id is null or p_request_id is null then
     raise exception 'User and request identifiers are required';
   end if;
-
-  if exists (
-    select 1
-    from public.user_subscriptions subscription
-    where subscription.user_id = p_user_id
-      and subscription.status in ('active', 'trialing')
-      and subscription.started_at <= now()
-      and subscription.ends_at > now()
-  ) then
-    return jsonb_build_object('status', 'premium');
-  end if;
-
-  insert into public.artemis_free_usage (user_id)
-  values (p_user_id)
-  on conflict (user_id) do nothing;
-
-  select * into usage_row
-  from public.artemis_free_usage
-  where user_id = p_user_id
-  for update;
-
-  if usage_row.free_used_at is not null then
-    return jsonb_build_object('status', 'subscription_required');
-  end if;
-
-  if usage_row.reservation_expires_at > now() then
-    return jsonb_build_object('status', 'in_progress');
-  end if;
-
-  update public.artemis_free_usage
-  set reservation_request_id = p_request_id,
-      reservation_expires_at = now() + interval '10 minutes',
-      updated_at = now()
-  where user_id = p_user_id;
 
   return jsonb_build_object('status', 'free');
 end;
@@ -427,51 +371,11 @@ security definer
 set search_path = public, pg_temp
 as $$
 begin
-  if exists (
-    select 1
-    from public.user_subscriptions subscription
-    where subscription.user_id = p_user_id
-      and subscription.status in ('active', 'trialing')
-      and subscription.started_at <= now()
-      and subscription.ends_at > now()
-  ) then
-    update public.artemis_free_usage
-    set reservation_request_id = null,
-        reservation_expires_at = null,
-        updated_at = now()
-    where user_id = p_user_id
-      and reservation_request_id = p_request_id
-      and free_used_at is null;
-
-    return jsonb_build_object('status', 'premium');
+  if p_user_id is null or p_request_id is null then
+    raise exception 'User and request identifiers are required';
   end if;
 
-  update public.artemis_free_usage
-  set free_used_at = now(),
-      last_request_id = p_request_id,
-      reservation_request_id = null,
-      reservation_expires_at = null,
-      updated_at = now()
-  where user_id = p_user_id
-    and reservation_request_id = p_request_id
-    and reservation_expires_at > now()
-    and free_used_at is null;
-
-  if found then
-    return jsonb_build_object('status', 'completed');
-  end if;
-
-  if exists (
-    select 1
-    from public.artemis_free_usage
-    where user_id = p_user_id
-      and free_used_at is not null
-      and last_request_id = p_request_id
-  ) then
-    return jsonb_build_object('status', 'completed');
-  end if;
-
-  return jsonb_build_object('status', 'reservation_lost');
+  return jsonb_build_object('status', 'completed');
 end;
 $$;
 
@@ -482,15 +386,11 @@ security definer
 set search_path = public, pg_temp
 as $$
 begin
-  update public.artemis_free_usage
-  set reservation_request_id = null,
-      reservation_expires_at = null,
-      updated_at = now()
-  where user_id = p_user_id
-    and reservation_request_id = p_request_id
-    and free_used_at is null;
+  if p_user_id is null or p_request_id is null then
+    raise exception 'User and request identifiers are required';
+  end if;
 
-  return found;
+  return true;
 end;
 $$;
 
@@ -543,15 +443,6 @@ drop policy if exists subscriptions_manage_own on public.user_subscriptions;
 drop policy if exists subscriptions_select_own on public.user_subscriptions;
 drop policy if exists subscriptions_insert_pending on public.user_subscriptions;
 drop policy if exists subscriptions_update_pending on public.user_subscriptions;
-create policy subscriptions_select_own on public.user_subscriptions
-for select using (auth.uid() = user_id);
-
-create policy subscriptions_insert_pending on public.user_subscriptions
-for insert with check (auth.uid() = user_id and status = 'pending');
-
-create policy subscriptions_update_pending on public.user_subscriptions
-for update using (auth.uid() = user_id and status = 'pending')
-with check (auth.uid() = user_id and status in ('pending', 'canceled'));
 
 revoke all on public.artemis_free_usage from anon, authenticated;
 grant all on public.artemis_free_usage to service_role;
@@ -565,8 +456,6 @@ grant execute on function public.artemis_complete_free_usage(uuid, uuid) to serv
 grant execute on function public.artemis_release_free_usage(uuid, uuid) to service_role;
 
 drop policy if exists plans_read_all on public.plans;
-create policy "plans_read_all" on public.plans
-for select using (auth.role() = 'authenticated');
 
 drop policy if exists exercises_read_all on public.exercises;
 create policy "exercises_read_all" on public.exercises
@@ -633,40 +522,6 @@ for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 -- =========================================================
 -- 12. Seed data (examples)
 -- =========================================================
-insert into public.plans (id, name, slug, price_monthly, price_yearly, description, features, active)
-values
-  (
-    gen_random_uuid(),
-    'Starter',
-    'starter',
-    29.90,
-    299.90,
-    'Para quem está começando e quer acompanhamento essencial.',
-    '["Treino IA básico", "Acompanhamento de progresso", "3 planos da semana"]'::jsonb,
-    true
-  ),
-  (
-    gen_random_uuid(),
-    'Pro',
-    'pro',
-    59.90,
-    599.90,
-    'Plano completo para evolução constante e acompanhamento avançado.',
-    '["Treino IA personalizado", "Acesso completo à biblioteca", "Relatórios de performance"]'::jsonb,
-    true
-  ),
-  (
-    gen_random_uuid(),
-    'Elite',
-    'elite',
-    99.90,
-    999.90,
-    'Experiência premium com suporte máximo e revisão de treinos.',
-    '["Tudo do Pro", "Consultoria prioritária", "Suporte e relatórios premium"]'::jsonb,
-    true
-  )
- on conflict do nothing;
-
 insert into public.exercises (
   id, name, category, muscle_group, equipment, equipment_options, difficulty,
   exercise_type, suggested_sets, suggested_reps, active, modality, objectives,

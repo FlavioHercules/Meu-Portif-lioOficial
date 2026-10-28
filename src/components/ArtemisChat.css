@@ -127,6 +127,97 @@
   font-size: 13px;
 }
 
+.artemis-chat__voice-controls {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-bottom: 12px;
+}
+
+.artemis-chat__voice-button,
+.artemis-chat__stop-speaking {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid rgba(156, 255, 87, 0.4);
+  border-radius: 8px;
+  background: rgba(87, 180, 42, 0.1);
+  color: #b8ff91;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.artemis-chat__voice-button span {
+  color: #9cff57;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.artemis-chat__voice-button:hover:not(:disabled),
+.artemis-chat__stop-speaking:hover {
+  background: rgba(87, 180, 42, 0.2);
+}
+
+.artemis-chat__voice-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.artemis-chat__voice-button.is-listening {
+  border-color: #9cff57;
+  box-shadow: 0 0 12px rgba(156, 255, 87, 0.25);
+  animation: artemis-voice-pulse 1.4s ease-in-out infinite;
+}
+
+.artemis-chat__speech-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #cbd5e1;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.artemis-chat__speech-toggle input {
+  accent-color: #9cff57;
+}
+
+.artemis-chat__stop-speaking {
+  min-height: 32px;
+  padding: 0 10px;
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(127, 29, 29, 0.18);
+  color: #fca5a5;
+}
+
+.artemis-chat__voice-status {
+  color: #9cff57;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.artemis-chat__voice-status.is-error,
+.artemis-chat__voice-message {
+  color: #fca5a5;
+}
+
+.artemis-chat__voice-message {
+  margin: -4px 0 12px;
+  font-size: 12px;
+}
+
+@keyframes artemis-voice-pulse {
+  50% { box-shadow: 0 0 18px rgba(156, 255, 87, 0.48); }
+}
+
 .artemis-chat__form {
   display: flex;
   align-items: stretch;
@@ -200,6 +291,10 @@
 
   .artemis-chat__form {
     flex-direction: column;
+  }
+
+  .artemis-chat__voice-controls {
+    gap: 10px 12px;
   }
 
   .artemis-chat__send {

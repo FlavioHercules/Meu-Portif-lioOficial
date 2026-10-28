@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { HashRouter as Router, Routes, Route } from "react-router-dom";
+import { HashRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import Home from "./components/Home";
 import IA from "./components/IA";
 import Movimentos from "./components/Movimentos";
-import Planos from "./components/Planos";
 import Perfil from "./components/Perfil";
 import NotificacoesModal from "./components/NotificacoesModal";
 import ConfiguracoesModal from "./components/ConfiguracoesModal";
@@ -191,7 +190,7 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/ia" element={<IA userId={session.user.id} pesquisa={pesquisa} onPesquisaChange={setPesquisa} onOpenNotif={() => setIsNotifOpen(true)} onOpenConfig={() => setIsConfigOpen(true)} />} />
             <Route path="/movimentos" element={<Movimentos userId={session.user.id} onOpenNotif={() => setIsNotifOpen(true)} onOpenConfig={() => setIsConfigOpen(true)} />} />
-            <Route path="/planos" element={<Planos userId={session.user.id} onOpenNotif={() => setIsNotifOpen(true)} onOpenConfig={() => setIsConfigOpen(true)} />} />
+            <Route path="/planos" element={<Navigate to="/" replace />} />
             <Route path="/perfil" element={<Perfil userProfile={{ ...userProfile, pesquisa }} onEditResearch={() => setIsResearchEditorOpen(true)} onSignOut={handleSignOut} onOpenNotif={() => setIsNotifOpen(true)} onOpenConfig={() => setIsConfigOpen(true)} />} />
           </Routes>
         </div>

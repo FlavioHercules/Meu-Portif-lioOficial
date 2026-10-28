@@ -394,7 +394,7 @@ const styles = {
   optionPillActive: {
     background: 'linear-gradient(90deg, #00e0ff 0%, #0066ff 100%)',
     color: '#fff',
-    borderColor: 'transparent',
+    border: '1px solid transparent',
     boxShadow: '0 0 12px rgba(0, 224, 255, 0.3)'
   },
   logoutBox: {

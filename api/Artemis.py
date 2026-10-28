@@ -6,7 +6,7 @@ import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from google import genai
@@ -21,6 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 # Carrega api/.env
 load_dotenv(BASE_DIR / ".env")
+PROJECT_ENV = dotenv_values(BASE_DIR.parent.parent / ".env")
 
 app = Flask(__name__)
 
@@ -91,8 +92,22 @@ FALLBACK_MODELS = [
 ]
 ACTIVE_MODEL = MODEL
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+if not SUPABASE_URL:
+    SUPABASE_URL = (
+        PROJECT_ENV.get("SUPABASE_URL")
+        or os.getenv("VITE_SUPABASE_URL")
+        or PROJECT_ENV.get("VITE_SUPABASE_URL")
+        or ""
+    ).strip().rstrip("/")
+
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+if not SUPABASE_ANON_KEY:
+    SUPABASE_ANON_KEY = (
+        PROJECT_ENV.get("SUPABASE_ANON_KEY")
+        or os.getenv("VITE_SUPABASE_ANON_KEY")
+        or PROJECT_ENV.get("VITE_SUPABASE_ANON_KEY")
+        or ""
+    ).strip()
 
 
 class SupabaseUnavailable(Exception):
@@ -149,6 +164,9 @@ def _authenticated_user_id():
     try:
         user_id = _validate_supabase_token(token.strip())
     except SupabaseUnavailable:
+        app.logger.error(
+            "Supabase authentication is unavailable; check SUPABASE_URL and SUPABASE_ANON_KEY configuration."
+        )
         return None, (_error_response(
             "authentication_unavailable",
             "Não foi possível validar sua sessão agora. Tente novamente.",
@@ -160,40 +178,6 @@ def _authenticated_user_id():
             "codigo": "invalid_session",
         }), 401)
     return user_id, None
-
-
-def _supabase_rpc(function_name, payload):
-    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        raise SupabaseUnavailable
-
-    return _supabase_request(
-        f"{SUPABASE_URL}/rest/v1/rpc/{function_name}",
-        "POST",
-        {
-            "apikey": SUPABASE_SERVICE_ROLE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-            "Content-Type": "application/json",
-        },
-        payload,
-    )
-
-
-def _access_status(user_id):
-    result = _supabase_rpc("artemis_check_access", {"p_user_id": user_id})
-    required_fields = ("premium", "free_available", "free_in_progress", "requires_subscription")
-    if not isinstance(result, dict) or any(field not in result for field in required_fields):
-        raise SupabaseUnavailable
-    return result
-
-
-def _release_free_reservation(user_id, request_id):
-    try:
-        _supabase_rpc("artemis_release_free_usage", {
-            "p_user_id": user_id,
-            "p_request_id": request_id,
-        })
-    except SupabaseUnavailable:
-        app.logger.warning("Could not release an Artemis free-use reservation.")
 
 
 def _error_response(code, message, status):
@@ -304,7 +288,7 @@ def home():
 
 @app.post("/perguntas")
 def perguntas():
-    user_id, auth_error = _authenticated_user_id()
+    _, auth_error = _authenticated_user_id()
     if auth_error:
         return auth_error
 
@@ -353,12 +337,6 @@ def perguntas():
             return _error_response("invalid_request", "O catálogo contém identificadores duplicados.", 400)
         validation = {"exercise_ids": normalized_exercise_ids, "weekdays": weekdays}
 
-    raw_request_id = request.headers.get("Idempotency-Key", "")
-    try:
-        request_id = str(uuid.UUID(raw_request_id))
-    except (ValueError, AttributeError):
-        return _error_response("invalid_request", "A requisição precisa de uma chave de idempotência UUID.", 400)
-
     conteudos = []
     for mensagem in historico[-100:]:
         if not isinstance(mensagem, dict):
@@ -380,27 +358,6 @@ def perguntas():
         role="user",
         parts=[types.Part(text=pergunta)],
     ))
-
-    try:
-        reservation = _supabase_rpc("artemis_reserve_access", {
-            "p_user_id": user_id,
-            "p_request_id": request_id,
-        })
-    except SupabaseUnavailable:
-        app.logger.error("Supabase authorization is unavailable for an Artemis request.")
-        return _error_response("authorization_unavailable", "Não foi possível verificar seu acesso à Artemis. Tente novamente.", 503)
-
-    if not isinstance(reservation, dict):
-        return _error_response("authorization_unavailable", "Não foi possível verificar seu acesso à Artemis. Tente novamente.", 503)
-
-    reservation_status = reservation.get("status")
-    if reservation_status == "subscription_required":
-        return _error_response("subscription_required", "Sua utilização gratuita já foi usada. Assine um plano para continuar usando a Artemis.", 402)
-    if reservation_status == "in_progress":
-        return _error_response("request_in_progress", "Já existe uma interação com a Artemis em andamento para sua conta.", 409)
-    if reservation_status not in ("free", "premium"):
-        return _error_response("authorization_unavailable", "Não foi possível verificar seu acesso à Artemis. Tente novamente.", 503)
-    reserved_free_use = reservation_status == "free"
 
     try:
         global ACTIVE_MODEL
@@ -453,17 +410,7 @@ def perguntas():
             raise ultimo_erro_api
 
         if not _valid_generated_response(texto, response_format, validation):
-            _release_free_reservation(user_id, request_id) if reserved_free_use else None
-            return _error_response("invalid_assistant_response", "A Artemis não conseguiu concluir uma resposta válida. Sua utilização gratuita não foi consumida.", 502)
-
-        if reserved_free_use:
-            completion = _supabase_rpc("artemis_complete_free_usage", {
-                "p_user_id": user_id,
-                "p_request_id": request_id,
-            })
-            if not isinstance(completion, dict) or completion.get("status") not in ("completed", "premium"):
-                _release_free_reservation(user_id, request_id)
-                return _error_response("authorization_unavailable", "Não foi possível confirmar a utilização. Tente novamente.", 503)
+            return _error_response("invalid_assistant_response", "A Artemis não conseguiu concluir uma resposta válida. Tente novamente.", 502)
 
         app.logger.info("Artemis completed a response using model %s.", ACTIVE_MODEL)
         return jsonify({
@@ -471,7 +418,6 @@ def perguntas():
         }), 200
 
     except errors.ClientError as error:
-        _release_free_reservation(user_id, request_id) if reserved_free_use else None
         code = getattr(error, "code", None)
         message = str(error)
         if (
@@ -491,29 +437,26 @@ def perguntas():
         app.logger.error("Gemini rejected an Artemis request (code=%s).", code)
         return _error_response("assistant_unavailable", "A Artemis não conseguiu responder agora. Tente novamente.", 502)
     except errors.ServerError as error:
-        _release_free_reservation(user_id, request_id) if reserved_free_use else None
         app.logger.warning("Gemini server error prevented an Artemis response.")
         return _error_response("assistant_unavailable", "A Artemis está temporariamente indisponível. Tente novamente mais tarde.", 503)
-    except SupabaseUnavailable:
-        app.logger.error("Supabase could not confirm an Artemis free-use reservation.")
-        return _error_response("authorization_unavailable", "Não foi possível confirmar seu acesso à Artemis. Tente novamente.", 503)
     except Exception as error:
-        _release_free_reservation(user_id, request_id) if reserved_free_use else None
         app.logger.error("Unexpected Artemis failure (%s).", type(error).__name__)
         return _error_response("assistant_unavailable", "Não foi possível processar sua pergunta. Tente novamente.", 500)
 
 
 @app.get("/acesso")
 def acesso():
-    user_id, auth_error = _authenticated_user_id()
+    _, auth_error = _authenticated_user_id()
     if auth_error:
         return auth_error
 
-    try:
-        return jsonify(_access_status(user_id)), 200
-    except SupabaseUnavailable:
-        app.logger.error("Supabase authorization status could not be loaded.")
-        return _error_response("authorization_unavailable", "Não foi possível verificar seu acesso à Artemis. Tente novamente.", 503)
+    return jsonify({
+        "available": True,
+        "premium": False,
+        "free_available": True,
+        "free_in_progress": False,
+        "requires_subscription": False,
+    }), 200
 
 
 # ============================================================

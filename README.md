@@ -27,7 +27,8 @@ npm install
 
 3. Aplique as migrações novas em `supabase/migrations` ao projeto Supabase antes de usar os recursos correspondentes.
    - Aplique `supabase/migrations/20261015_curated_exercise_library.sql` para atualizar o catálogo de exercícios. A migração mantém os IDs existentes quando encontra correspondências, preserva vídeos/imagens já cadastrados e desativa (sem excluir) exercícios fora da seleção inicial.
-   - Aplique `supabase/migrations/20261017_exercise_catalog_display_fields.sql` e `supabase/migrations/20261018_artemis_monetization.sql` para atualizar as colunas do catálogo e ativar o controle de acesso da Artemis.
+   - Aplique `supabase/migrations/20261017_exercise_catalog_display_fields.sql` para atualizar as colunas do catálogo.
+   - Se `20261018_artemis_monetization.sql` foi aplicada, aplique depois `supabase/migrations/20261020_artemis_free_access.sql` para remover o limite da Artemis e desativar as políticas antigas de planos/assinaturas. Em instalações novas, use o `schema.sql` atualizado.
 4. Para cadastrar vídeos de exercícios:
    - Aplique `supabase/migrations/20261014_exercise_video_storage.sql`.
    - No painel do Supabase, abra **Storage**, entre no bucket público `exercise-videos` e envie um arquivo MP4.
@@ -50,13 +51,12 @@ GEMINI_MODEL=gemini-3.8-flash
 GEMINI_FALLBACK_MODELS=gemini-3.1-flash-lite
 SUPABASE_URL=https://seu-projeto.supabase.co
 SUPABASE_ANON_KEY=sua_chave_publica_anon
-SUPABASE_SERVICE_ROLE_KEY=chave_privilegiada_apenas_no_backend
 ARTEMIS_CORS_ORIGINS=https://seu-dominio.com
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` e `GEMINI_API_KEY` são segredos do servidor: nunca os use no frontend, repositório ou logs. O backend valida cada bearer token via Supabase Auth e controla uma interação gratuita por usuário, compartilhada entre chat e geração de treino. A reserva expira/libera se o Gemini falhar; só uma resposta válida marca a gratuidade como usada.
+O backend valida cada bearer token via Supabase Auth. A Artemis e os demais recursos do sistema são gratuitos, sem planos, assinatura ou limite de interações por usuário. A API não precisa de uma chave `service_role`.
 
-Ainda não há provedor de pagamento nem webhook configurado. O fluxo atual de planos apenas registra solicitações pendentes e não libera acesso premium. Para pagamentos reais, escolha e configure um provedor, valide seus webhooks no backend e atualize a assinatura somente após confirmação verificável. A migração prepara campos de provedor/período, mas não simula nem confirma cobranças.
+No desenvolvimento local, o backend usa `SUPABASE_URL` e `SUPABASE_ANON_KEY` do `api/.env`. Se não estiverem definidos, ele reutiliza `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` do `.env` da raiz do projeto.
 
 Para desenvolver sem compartilhar segredos, use os arquivos `.env.example` como modelo. No backend, configure `ARTEMIS_CORS_ORIGINS` com as origens exatas do frontend (separadas por vírgulas); a configuração padrão permite apenas localhost.
 
@@ -71,4 +71,4 @@ Testes focados do backend (sem chamar Gemini ou Supabase reais): `cd api` e `pyt
 ## Observações
 
 - A API da Artemis não deve ser chamada no desenvolvimento local sem a chave correta configurada.
-- O fluxo de assinatura é controlado com política de RLS; pagamentos reais exigem integração externa.
+- Dados e tabelas de assinaturas antigos podem permanecer no Supabase por compatibilidade, mas não são usados pelo aplicativo.

@@ -886,7 +886,7 @@ const styles = {
   pillBtnActive: {
     backgroundColor: 'rgba(0, 224, 255, 0.13)',
     color: '#67e8f9',
-    borderColor: 'rgba(0, 224, 255, 0.55)'
+    border: '1px solid rgba(0, 224, 255, 0.55)'
   },
 
   sectionCard: {

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Navbar from './Navbar';
 import ArtemisChat from './ArtemisChat';
-import { askArtemis, getArtemisAccess } from '../services/artemisApi';
+import { askArtemis } from '../services/artemisApi';
 import { findExerciseByName, loadAiWorkout, readAiWorkout, saveAiWorkout } from '../services/aiWorkoutStorage';
 import { supabase } from '../lib/supabase';
 import { defaultSchedule, trainingDayIndexes, weekDays } from '../utils/trainingDays';
@@ -77,7 +77,6 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
   const [isGeneratingWorkout, setIsGeneratingWorkout] = useState(false);
   const [exerciseCatalog, setExerciseCatalog] = useState([]);
-  const [artemisAccess, setArtemisAccess] = useState({ status: 'loading' });
   const [selectedTrainingDays, setSelectedTrainingDays] = useState(() => {
     const savedDays = trainingDayIndexes(pesquisa?.training_days);
     return savedDays.length === sessionsPerWeek(pesquisa?.weekly_frequency)
@@ -87,28 +86,6 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
 
   useEffect(() => {
     let isActive = true;
-
-    getArtemisAccess()
-      .then((access) => {
-        if (!isActive) return;
-        if (typeof access?.premium !== 'boolean'
-          || typeof access?.free_available !== 'boolean'
-          || typeof access?.free_in_progress !== 'boolean'
-          || typeof access?.requires_subscription !== 'boolean') {
-          throw new Error('Não foi possível interpretar o estado da sua assinatura.');
-        }
-        setArtemisAccess({
-          ...access,
-          status: access.premium ? 'premium'
-            : access.requires_subscription ? 'required'
-              : access.free_in_progress ? 'busy'
-                : access.free_available ? 'free'
-                  : 'error',
-        });
-      })
-      .catch((error) => {
-        if (isActive) setArtemisAccess({ status: 'error', error: error.message });
-      });
 
     supabase
       .from('exercises')
@@ -136,28 +113,6 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
       isActive = false;
     };
   }, [userId]);
-
-  const refreshArtemisAccess = async () => {
-    try {
-      const access = await getArtemisAccess();
-      if (typeof access?.premium !== 'boolean'
-        || typeof access?.free_available !== 'boolean'
-        || typeof access?.free_in_progress !== 'boolean'
-        || typeof access?.requires_subscription !== 'boolean') {
-        throw new Error('Não foi possível interpretar o estado da sua assinatura.');
-      }
-      setArtemisAccess({
-        ...access,
-        status: access.premium ? 'premium'
-          : access.requires_subscription ? 'required'
-            : access.free_in_progress ? 'busy'
-              : access.free_available ? 'free'
-                : 'error',
-      });
-    } catch (error) {
-      setArtemisAccess({ status: 'error', error: error.message });
-    }
-  };
 
   const updatePreference = (field, value) => {
     setPreferences((current) => ({ ...current, [field]: value }));
@@ -261,7 +216,6 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
     setWorkoutError('');
     setIsGeneratingWorkout(true);
 
-    let responseGenerated = false;
     try {
       const catalogForPrompt = catalog.map((exercise) => ({
         id: exercise.id,
@@ -305,7 +259,6 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
           weekdays: orderedDays.map((dayIndex) => weekDays[dayIndex]),
         },
       });
-      responseGenerated = true;
       const plan = parseWorkoutPlan(response);
       const linkedPlan = {
         ...plan,
@@ -378,52 +331,10 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
       }
     } catch (error) {
       setWorkoutError(error.message || 'Não foi possível gerar o treino. Tente novamente.');
-      if (error.code === 'subscription_required') void refreshArtemisAccess();
     } finally {
-      if (responseGenerated) void refreshArtemisAccess();
       setIsGeneratingWorkout(false);
     }
   };
-
-  if (artemisAccess.status === 'loading') {
-    return (
-      <div style={styles.appContainer}>
-        <Navbar onOpenNotif={onOpenNotif} onOpenConfig={onOpenConfig} />
-        <main className="ia-dashboard" style={{ ...styles.dashboardGrid, gridTemplateColumns: 'minmax(0, 1fr)' }}>
-          <section style={styles.sectionCard} role="status" aria-live="polite">
-            <h1 style={styles.heroTitle}>Verificando seu acesso à Artemis...</h1>
-            <p style={styles.heroDesc}>Aguarde enquanto confirmamos sua gratuidade ou assinatura.</p>
-          </section>
-        </main>
-      </div>
-    );
-  }
-
-  if (artemisAccess.status === 'required') {
-    return (
-      <div style={styles.appContainer}>
-        <Navbar onOpenNotif={onOpenNotif} onOpenConfig={onOpenConfig} />
-        <main className="ia-dashboard" style={{ ...styles.dashboardGrid, gridTemplateColumns: 'minmax(0, 1fr)' }}>
-          <section style={styles.sectionCard} aria-labelledby="artemis-premium-title">
-            <span style={styles.heroTag}>— ACESSO PREMIUM</span>
-            <h1 id="artemis-premium-title" style={styles.heroTitle}>Sua utilização gratuita já foi usada</h1>
-            <p style={styles.heroDesc}>Para continuar conversando com a Artemis ou gerar novos treinos, conheça os planos disponíveis. Seu histórico e seus treinos salvos continuam preservados.</p>
-            {workout && (
-              <div style={{ ...styles.sectionCard, marginTop: '20px' }}>
-                <h2 style={styles.stepTitleText}>ÚLTIMO TREINO GERADO</h2>
-                <p style={{ color: '#dbe4f0', lineHeight: 1.7, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{workout}</p>
-              </div>
-            )}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', margin: '20px 0' }}>
-              <Link to="/planos" style={styles.generateButton}>Conhecer os planos</Link>
-              <button type="button" style={styles.savePreferencesButton} onClick={() => void refreshArtemisAccess()}>Verificar meu acesso novamente</button>
-            </div>
-            <ArtemisChat userId={userId} exerciseCatalog={exerciseCatalog} disabled onAccessChanged={() => {}} />
-          </section>
-        </main>
-      </div>
-    );
-  }
 
   return (
     <div style={styles.appContainer}>
@@ -447,28 +358,9 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
               <p style={styles.heroDesc}>
                 A IA usa seus dados e preferências para criar um treino personalizado para você.
               </p>
-              {artemisAccess.status === 'free' && (
-                <p role="status" style={{ color: '#a5f3fc', fontSize: '13px', fontWeight: 700 }}>
-                  Você tem uma utilização gratuita da Artemis nesta conta.
-                </p>
-              )}
-              {artemisAccess.status === 'premium' && (
-                <p role="status" style={{ color: '#a5f3fc', fontSize: '13px', fontWeight: 700 }}>
-                  Seu acesso premium à Artemis está ativo.
-                </p>
-              )}
-              {artemisAccess.status === 'busy' && (
-                <p role="status" style={{ color: '#fde68a', fontSize: '13px', fontWeight: 700 }}>
-                  Uma interação da Artemis já está em andamento nesta conta. Aguarde ou verifique o acesso novamente.
-                  <button type="button" onClick={() => void refreshArtemisAccess()} style={styles.savePreferencesButton}>Verificar novamente</button>
-                </p>
-              )}
-              {artemisAccess.status === 'error' && (
-                <p role="alert" style={{ color: '#fde68a', fontSize: '13px' }}>
-                  {artemisAccess.error || 'Não foi possível verificar o acesso agora. O servidor continuará validando sua autorização antes de cada resposta.'}
-                  <button type="button" onClick={() => void refreshArtemisAccess()} style={styles.savePreferencesButton}>Tentar novamente</button>
-                </p>
-              )}
+              <p role="status" style={{ color: '#a5f3fc', fontSize: '13px', fontWeight: 700 }}>
+                Acesso gratuito à Artemis, sem limite de interações.
+              </p>
 
               <div style={styles.heroFeatures}>
                 <div style={styles.featureBadge}>
@@ -501,8 +393,7 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
           <ArtemisChat
             userId={userId}
             exerciseCatalog={exerciseCatalog}
-            disabled={artemisAccess.status === 'busy' || isGeneratingWorkout}
-            onAccessChanged={refreshArtemisAccess}
+            disabled={isGeneratingWorkout}
           />
 
           {/* Passo 1: Informe seus dados (Selects em linha) */}
@@ -630,7 +521,7 @@ export default function IA({ userId, pesquisa, onPesquisaChange, onOpenNotif, on
                 type="button"
                 style={styles.generateButton}
                 onClick={handleGenerateWorkout}
-                disabled={isGeneratingWorkout || isSavingPreferences || artemisAccess.status === 'busy'}
+                disabled={isGeneratingWorkout || isSavingPreferences}
                 aria-busy={isGeneratingWorkout}
               >
                 <svg style={{ width: '18px', height: '18px' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">

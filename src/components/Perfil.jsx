@@ -299,34 +299,6 @@ export default function Perfil({ userProfile = {}, onEditResearch, onSignOut, on
             </div>
           </div>
 
-          {/* Seu Plano */}
-          <div style={styles.sideCard}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '16px' }}>👑</span>
-                <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 700, letterSpacing: '0.05em' }}>SEU PLANO</span>
-              </div>
-              <span style={{ color: '#00e0ff', fontSize: '12px' }}>›</span>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-              <span style={{ fontSize: '14px' }}>👑</span>
-              <span style={{ fontSize: '12px', fontWeight: 900, color: '#fff' }}>{userProfile.plan_name || 'Plano não informado'}</span>
-              <span style={{ fontSize: '8px', fontWeight: 800, backgroundColor: 'rgba(0,224,255,0.15)', color: '#00e0ff', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(0,224,255,0.3)' }}>
-                {userProfile.plan_status || 'NÃO DEFINIDO'}
-              </span>
-            </div>
-
-            <p style={{ fontSize: '10px', color: '#94a3b8', margin: '0 0 12px 0' }}>
-              {userProfile.plan_description || 'Acesse a página de planos para visualizar as opções disponíveis.'}
-            </p>
-
-            <button style={styles.sidePlanButton}>
-              <span>Ver planos</span>
-              <span>→</span>
-            </button>
-          </div>
-
           {/* Configurações Rápidas */}
           <div style={styles.sideCard}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
@@ -596,7 +568,7 @@ const styles = {
   prefPillActive: {
     backgroundColor: '#00e0ff',
     color: '#050508',
-    borderColor: '#00e0ff'
+    border: '1px solid #00e0ff'
   },
   prefDetailsRow: {
     display: 'grid',
@@ -655,20 +627,6 @@ const styles = {
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center'
-  },
-  sidePlanButton: {
-    backgroundColor: '#0b0e1b',
-    border: '1px solid rgba(0, 162, 255, 0.4)',
-    color: '#fff',
-    borderRadius: '10px',
-    padding: '8px 12px',
-    fontSize: '11px',
-    fontWeight: 700,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    cursor: 'pointer',
-    width: '100%'
   },
   configList: {
     display: 'flex',

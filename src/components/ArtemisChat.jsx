@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { askArtemis } from '../services/artemisApi';
 import { loadArtemisMessages, saveArtemisMessage } from '../services/aiWorkoutStorage';
@@ -76,7 +76,6 @@ export default function ArtemisChat({
   userId,
   exerciseCatalog = [],
   disabled = false,
-  onAccessChanged = () => {},
 }) {
   const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState('');
@@ -84,6 +83,40 @@ export default function ArtemisChat({
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [voiceStatus, setVoiceStatus] = useState('idle');
+  const [voiceMessage, setVoiceMessage] = useState('');
+  const [spokenResponsesEnabled, setSpokenResponsesEnabled] = useState(true);
+  const recognitionRef = useRef(null);
+  const utteranceRef = useRef(null);
+  const submissionRef = useRef(false);
+  const spokenResponsesRef = useRef(true);
+
+  const Recognition = typeof window !== 'undefined'
+    ? window.SpeechRecognition || window.webkitSpeechRecognition
+    : null;
+  const speechSynthesisAvailable = typeof window !== 'undefined'
+    && 'speechSynthesis' in window
+    && typeof window.SpeechSynthesisUtterance === 'function';
+
+  useEffect(() => () => {
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    if (recognition) {
+      recognition.onstart = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      recognition.abort();
+    }
+    const utterance = utteranceRef.current;
+    utteranceRef.current = null;
+    if (utterance) {
+      utterance.onstart = null;
+      utterance.onend = null;
+      utterance.onerror = null;
+    }
+    if (typeof window !== 'undefined') window.speechSynthesis?.cancel();
+  }, []);
 
   useEffect(() => {
     let isActive = true;
@@ -106,15 +139,19 @@ export default function ArtemisChat({
     };
   }, [userId]);
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    const pergunta = question.trim();
-    if (!pergunta || isLoading || isLoadingHistory || disabled) return;
+  const sendQuestion = async (rawQuestion, { speak = spokenResponsesEnabled } = {}) => {
+    const pergunta = rawQuestion.trim();
+    if (!pergunta || submissionRef.current || isLoadingHistory || disabled) return;
+    submissionRef.current = true;
+    recognitionRef.current?.stop();
+
     const recentContext = messages.slice(-6).map((message) => message.content).join(' ');
     const includeCatalog = exerciseTopicPattern.test(`${recentContext} ${pergunta}`);
     if (includeCatalog && !exerciseCatalog.length) {
       setErrorMessage('Não consegui carregar o catálogo de exercícios da MotionFit. Aguarde um instante e tente novamente.');
       setHasError(true);
+      setVoiceStatus(speak ? 'error' : 'idle');
+      submissionRef.current = false;
       return;
     }
 
@@ -127,6 +164,10 @@ export default function ArtemisChat({
     setHasError(false);
     setErrorMessage('');
     setIsLoading(true);
+    if (speak) {
+      setVoiceStatus('processing');
+      setVoiceMessage('Processando sua pergunta...');
+    }
 
     try {
       const savedQuestion = await saveArtemisMessage(userId, {
@@ -174,16 +215,129 @@ export default function ArtemisChat({
         setErrorMessage('A Artemis respondeu, mas não foi possível salvar a resposta na sua conta.');
         setHasError(true);
       }
-      onAccessChanged();
+
+      if (speak && spokenResponsesRef.current && speechSynthesisAvailable) {
+        const utterance = new SpeechSynthesisUtterance(
+          resposta.replace(/\[\[exercicio:[0-9a-f-]{36}\|([^\]]+)\]\]/gi, '$1'),
+        );
+        utterance.lang = 'pt-BR';
+        const portugueseVoice = window.speechSynthesis.getVoices().find((voice) => /^pt(-|_)/i.test(voice.lang));
+        if (portugueseVoice) utterance.voice = portugueseVoice;
+        utterance.onstart = () => setVoiceStatus('speaking');
+        utterance.onend = () => {
+          utteranceRef.current = null;
+          setVoiceStatus('idle');
+        };
+        utterance.onerror = () => {
+          utteranceRef.current = null;
+          setVoiceStatus('error');
+          setVoiceMessage('Não foi possível reproduzir a resposta em voz alta.');
+        };
+        utteranceRef.current = utterance;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+      } else if (speak) {
+        setVoiceStatus('idle');
+        setVoiceMessage(speechSynthesisAvailable ? '' : 'Este navegador não oferece síntese de voz.');
+      }
     } catch (error) {
       setMessages((currentMessages) => currentMessages.filter((message) => message.id !== temporaryId));
       setErrorMessage(error.message || 'Não foi possível salvar sua pergunta ou conectar com a Artemis. Tente novamente.');
       setHasError(true);
-      if (error.code === 'subscription_required') onAccessChanged();
+      if (speak) {
+        setVoiceStatus('error');
+        setVoiceMessage(error.message || 'Não foi possível processar sua pergunta por voz.');
+      }
     } finally {
       setIsLoading(false);
+      submissionRef.current = false;
     }
   };
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    void sendQuestion(question);
+  };
+
+  const handleMicrophoneClick = () => {
+    if (!Recognition) {
+      setVoiceStatus('error');
+      setVoiceMessage('O reconhecimento de voz não é compatível com este navegador.');
+      return;
+    }
+    if (voiceStatus === 'listening') {
+      recognitionRef.current?.stop();
+      setVoiceStatus('idle');
+      return;
+    }
+    if (isLoading || isLoadingHistory || disabled || submissionRef.current) return;
+
+    const recognition = new Recognition();
+    recognition.lang = 'pt-BR';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognitionRef.current = recognition;
+    setVoiceMessage('');
+    recognition.onstart = () => setVoiceStatus('listening');
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .filter((result) => result.isFinal)
+        .map((result) => result[0]?.transcript || '')
+        .join(' ')
+        .trim();
+      if (transcript) {
+        setQuestion(transcript);
+        void sendQuestion(transcript, { speak: true });
+      }
+    };
+    recognition.onerror = (event) => {
+      const messages = {
+        'not-allowed': 'Permita o acesso ao microfone nas configurações do navegador.',
+        'service-not-allowed': 'O navegador bloqueou o serviço de reconhecimento de voz.',
+        'audio-capture': 'Nenhum microfone disponível foi encontrado.',
+        'no-speech': 'Nenhuma fala foi detectada. Tente novamente.',
+        network: 'Falha de rede durante o reconhecimento de voz.',
+      };
+      setVoiceStatus('error');
+      setVoiceMessage(messages[event.error] || 'Ocorreu um erro no reconhecimento de voz.');
+    };
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setVoiceStatus((currentStatus) => currentStatus === 'listening' ? 'idle' : currentStatus);
+    };
+    try {
+      recognition.start();
+    } catch {
+      setVoiceStatus('error');
+      setVoiceMessage('Não foi possível iniciar o microfone. Tente novamente.');
+    }
+  };
+
+  const stopSpeaking = () => {
+    const utterance = utteranceRef.current;
+    utteranceRef.current = null;
+    if (utterance) {
+      utterance.onstart = null;
+      utterance.onend = null;
+      utterance.onerror = null;
+    }
+    window.speechSynthesis?.cancel();
+    setVoiceStatus('idle');
+  };
+
+  const toggleSpokenResponses = (event) => {
+    const enabled = event.target.checked;
+    spokenResponsesRef.current = enabled;
+    setSpokenResponsesEnabled(enabled);
+    if (!enabled) stopSpeaking();
+  };
+
+  const voiceStatusLabel = {
+    listening: 'OUVINDO',
+    processing: 'PROCESSANDO',
+    speaking: 'FALANDO',
+    error: 'ERRO DE VOZ',
+  }[voiceStatus];
 
   return (
     <section className="artemis-chat" aria-labelledby="artemis-chat-title">
@@ -224,6 +378,40 @@ export default function ArtemisChat({
       {hasError && (
         <p className="artemis-chat__error" role="alert">
           {errorMessage}
+        </p>
+      )}
+
+      <div className="artemis-chat__voice-controls">
+        <button
+          className={`artemis-chat__voice-button${voiceStatus === 'listening' ? ' is-listening' : ''}`}
+          type="button"
+          onClick={handleMicrophoneClick}
+          disabled={!Recognition || disabled || isLoading || isLoadingHistory}
+          aria-label={voiceStatus === 'listening' ? 'Parar de ouvir' : 'Fazer pergunta por voz'}
+          title={Recognition ? 'Fazer pergunta por voz' : 'Reconhecimento de voz incompatível com este navegador'}
+        >
+          <span aria-hidden="true">◉</span>
+          {voiceStatus === 'listening' ? 'Parar de ouvir' : 'Falar'}
+        </button>
+        <label className="artemis-chat__speech-toggle">
+          <input
+            type="checkbox"
+            checked={spokenResponsesEnabled}
+            onChange={toggleSpokenResponses}
+            disabled={!speechSynthesisAvailable}
+          />
+          Respostas faladas
+        </label>
+        {voiceStatus === 'speaking' && (
+          <button className="artemis-chat__stop-speaking" type="button" onClick={stopSpeaking}>
+            Interromper fala
+          </button>
+        )}
+        {voiceStatusLabel && <span className={`artemis-chat__voice-status is-${voiceStatus}`} role="status">{voiceStatusLabel}</span>}
+      </div>
+      {(voiceMessage || !Recognition) && (
+        <p className="artemis-chat__voice-message" role={voiceStatus === 'error' ? 'alert' : 'status'}>
+          {voiceMessage || 'Reconhecimento de voz não compatível com este navegador.'}
         </p>
       )}
 

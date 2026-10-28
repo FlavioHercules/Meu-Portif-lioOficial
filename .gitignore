@@ -25,3 +25,7 @@ api/__pycache__/
 *.njsproj
 *.sln
 *.sw?
+
+# Arquivos temporarios do Python
+__pycache__/
+*.pyc

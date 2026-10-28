@@ -62,20 +62,11 @@ async function requestArtemis(path, options = {}) {
   }
 }
 
-export async function getArtemisAccess() {
-  return requestArtemis('/acesso');
-}
-
 export async function askArtemis(pergunta, historico = [], options = {}) {
-  if (!globalThis.crypto?.randomUUID && !options.requestId) {
-    throw new ArtemisApiError('Este dispositivo não oferece suporte seguro às solicitações da Artemis.', 'idempotency_unavailable');
-  }
-  const requestId = options.requestId || globalThis.crypto.randomUUID();
   const data = await requestArtemis('/perguntas', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Idempotency-Key': requestId,
     },
     body: JSON.stringify({
       pergunta,
