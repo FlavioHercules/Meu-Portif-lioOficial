@@ -53,14 +53,14 @@ GEMINI_MODEL=gemini-3.8-flash
 GEMINI_FALLBACK_MODELS=gemini-3.1-flash-lite
 SUPABASE_URL=https://seu-projeto.supabase.co
 SUPABASE_ANON_KEY=sua_chave_publica_anon
-ARTEMIS_CORS_ORIGINS=https://seu-dominio.com
+ARTEMIS_CORS_ORIGINS=https://meu-portif-lio-oficial-ehx9jn3u9-flavio-hercules-projects.vercel.app
 ```
 
 O backend valida cada bearer token via Supabase Auth. A Artemis e os demais recursos do sistema são gratuitos, sem planos, assinatura ou limite de interações por usuário. A API não precisa de uma chave `service_role`.
 
 No desenvolvimento local, o backend usa `SUPABASE_URL` e `SUPABASE_ANON_KEY` do `api/.env`. Se não estiverem definidos, ele reutiliza `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` do `.env` da raiz do projeto.
 
-Para desenvolver sem compartilhar segredos, use os arquivos `.env.example` como modelo. No backend, configure `ARTEMIS_CORS_ORIGINS` com as origens exatas do frontend (separadas por vírgulas); a configuração padrão permite apenas localhost.
+Para desenvolver sem compartilhar segredos, use os arquivos `.env.example` como modelo. A API permite a origem de produção/preview da Vercel informada para a MotionFit e localhost para desenvolvimento. No Render, configure `ARTEMIS_CORS_ORIGINS` com as origens exatas adicionais do frontend, separadas por vírgulas. A URL informada pelo navegador deve apontar para `https://motionfit-artemis-api.onrender.com`; a origem permitida do frontend é `https://meu-portif-lio-oficial-ehx9jn3u9-flavio-hercules-projects.vercel.app`.
 
 Testes focados do backend (sem chamar Gemini ou Supabase reais): `cd api` e `python -m unittest discover -s tests -v`.
 

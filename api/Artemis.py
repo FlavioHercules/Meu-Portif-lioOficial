@@ -25,26 +25,30 @@ PROJECT_ENV = dotenv_values(BASE_DIR.parent.parent / ".env")
 
 app = Flask(__name__)
 
+cors_origins = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv("ARTEMIS_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+cors_origins.extend(
+    [
+        "https://meu-portif-lio-oficial-ehx9jn3u9-flavio-hercules-projects.vercel.app",
+        r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    ]
+)
+
 CORS(
     app,
     resources={
         r"/perguntas": {
-            "origins": [
-                origin.strip()
-                for origin in os.getenv("ARTEMIS_CORS_ORIGINS", "").split(",")
-                if origin.strip()
-            ] or [
-                r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
-            ]
+            "origins": cors_origins,
+            "methods": ["POST", "OPTIONS"],
+            "allow_headers": ["Authorization", "Content-Type"],
         },
         r"/acesso": {
-            "origins": [
-                origin.strip()
-                for origin in os.getenv("ARTEMIS_CORS_ORIGINS", "").split(",")
-                if origin.strip()
-            ] or [
-                r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
-            ]
+            "origins": cors_origins,
+            "methods": ["GET", "OPTIONS"],
+            "allow_headers": ["Authorization", "Content-Type"],
         },
     },
 )

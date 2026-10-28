@@ -59,6 +59,37 @@ class ArtemisFreeAccessTests(unittest.TestCase):
             headers=headers,
         )
 
+    def test_vercel_preflight_allows_post_and_required_headers(self):
+        origin = "https://meu-portif-lio-oficial-ehx9jn3u9-flavio-hercules-projects.vercel.app"
+        response = self.client.options(
+            "/perguntas",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), origin)
+        self.assertIn("POST", response.headers.get("Access-Control-Allow-Methods", ""))
+        self.assertIn("OPTIONS", response.headers.get("Access-Control-Allow-Methods", ""))
+        allowed_headers = response.headers.get("Access-Control-Allow-Headers", "").lower()
+        self.assertIn("authorization", allowed_headers)
+        self.assertIn("content-type", allowed_headers)
+
+    def test_unlisted_origin_is_not_allowed_by_cors(self):
+        response = self.client.options(
+            "/perguntas",
+            headers={
+                "Origin": "https://unlisted.example",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+
+        self.assertIsNone(response.headers.get("Access-Control-Allow-Origin"))
+
     def test_authenticated_user_can_make_unlimited_interactions(self):
         responses = [self.post_question(self.user_id) for _ in range(5)]
 
