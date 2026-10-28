@@ -19,6 +19,8 @@ VITE_SUPABASE_ANON_KEY=sua_chave_anonima
 VITE_ARTEMIS_API_URL=http://localhost:5000
 ```
 
+Em desenvolvimento, se `VITE_ARTEMIS_API_URL` não estiver definida, a Artemis usa `http://localhost:5000`. Em produção, configure essa variável com a URL pública da API; sem ela, o aplicativo apresenta um erro claro de configuração em vez de tentar acessar localhost. Na Vercel, defina `VITE_ARTEMIS_API_URL` como `https://motionfit-artemis-api.onrender.com` para o ambiente **Production** e faça um novo deploy.
+
 2. Instale as dependências:
 
 ```

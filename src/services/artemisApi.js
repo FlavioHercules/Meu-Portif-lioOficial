@@ -1,8 +1,5 @@
 import { supabase } from '../lib/supabase';
 
-const apiBaseUrl = (
-  import.meta.env.VITE_ARTEMIS_API_URL || 'http://localhost:5000'
-).trim().replace(/\/+$/, '');
 const maxHistoryMessages = 100;
 
 export class ArtemisApiError extends Error {
@@ -12,6 +9,17 @@ export class ArtemisApiError extends Error {
     this.code = code;
     this.status = status;
   }
+}
+
+function getApiBaseUrl() {
+  const configuredUrl = import.meta.env.VITE_ARTEMIS_API_URL?.trim();
+  if (configuredUrl) return configuredUrl.replace(/\/+$/, '');
+  if (import.meta.env.DEV) return 'http://localhost:5000';
+
+  throw new ArtemisApiError(
+    'A URL da API da Artemis não está configurada. Defina VITE_ARTEMIS_API_URL para este ambiente.',
+    'configuration_error',
+  );
 }
 
 async function authenticatedHeaders() {
@@ -39,6 +47,7 @@ async function readResponse(response) {
 }
 
 async function requestArtemis(path, options = {}) {
+  const apiBaseUrl = getApiBaseUrl();
   const headers = await authenticatedHeaders();
   const controller = new AbortController();
   const timeoutMs = path === '/perguntas' ? 7 * 60 * 1000 : 15000;
