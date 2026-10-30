@@ -32,7 +32,8 @@ cors_origins = [
 ]
 cors_origins.extend(
     [
-        "https://meu-portif-lio-oficial-ehx9jn3u9-flavio-hercules-projects.vercel.app",
+        "https://meu-portif-lio-oficial.vercel.app",
+        r"^https://meu-portif-lio-oficial-[a-z0-9]+(?:-[a-z0-9]+)*-flavio-hercules-projects\.vercel\.app$",
         r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     ]
 )
@@ -48,6 +49,11 @@ CORS(
         r"/acesso": {
             "origins": cors_origins,
             "methods": ["GET", "OPTIONS"],
+            "allow_headers": ["Authorization", "Content-Type"],
+        },
+        r"/api/index": {
+            "origins": cors_origins,
+            "methods": ["GET", "POST", "OPTIONS"],
             "allow_headers": ["Authorization", "Content-Type"],
         },
     },
@@ -290,6 +296,7 @@ def home():
 # ROTA DA ARTEMIS
 # ============================================================
 
+@app.post("/api/index")
 @app.post("/perguntas")
 def perguntas():
     _, auth_error = _authenticated_user_id()
@@ -448,6 +455,7 @@ def perguntas():
         return _error_response("assistant_unavailable", "Não foi possível processar sua pergunta. Tente novamente.", 500)
 
 
+@app.get("/api/index")
 @app.get("/acesso")
 def acesso():
     _, auth_error = _authenticated_user_id()

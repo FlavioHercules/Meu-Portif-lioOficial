@@ -59,42 +59,98 @@ class ArtemisFreeAccessTests(unittest.TestCase):
             headers=headers,
         )
 
-    def test_vercel_preflight_allows_post_and_required_headers(self):
-        origin = "https://meu-portif-lio-oficial-ehx9jn3u9-flavio-hercules-projects.vercel.app"
+    def test_vercel_preflight_allows_production_and_preview_origins(self):
+        origins = (
+            "https://meu-portif-lio-oficial.vercel.app",
+            "https://meu-portif-lio-oficial-qvm5f7p98-flavio-hercules-projects.vercel.app",
+            "https://meu-portif-lio-oficial-another-valid-preview-flavio-hercules-projects.vercel.app",
+        )
+        for origin in origins:
+            with self.subTest(origin=origin):
+                response = self.client.options(
+                    "/perguntas",
+                    headers={
+                        "Origin": origin,
+                        "Access-Control-Request-Method": "POST",
+                        "Access-Control-Request-Headers": "authorization,content-type",
+                    },
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), origin)
+                methods = response.headers.get("Access-Control-Allow-Methods", "")
+                self.assertIn("POST", methods)
+                self.assertIn("OPTIONS", methods)
+                allowed_headers = response.headers.get("Access-Control-Allow-Headers", "").lower()
+                self.assertIn("authorization", allowed_headers)
+                self.assertIn("content-type", allowed_headers)
+
+    def test_vercel_function_preflight_allows_post_and_required_headers(self):
         response = self.client.options(
-            "/perguntas",
+            "/api/index",
             headers={
-                "Origin": origin,
+                "Origin": "https://meu-portif-lio-oficial.vercel.app",
                 "Access-Control-Request-Method": "POST",
                 "Access-Control-Request-Headers": "authorization,content-type",
             },
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), origin)
+        self.assertEqual(
+            response.headers.get("Access-Control-Allow-Origin"),
+            "https://meu-portif-lio-oficial.vercel.app",
+        )
         self.assertIn("POST", response.headers.get("Access-Control-Allow-Methods", ""))
-        self.assertIn("OPTIONS", response.headers.get("Access-Control-Allow-Methods", ""))
         allowed_headers = response.headers.get("Access-Control-Allow-Headers", "").lower()
         self.assertIn("authorization", allowed_headers)
         self.assertIn("content-type", allowed_headers)
 
     def test_unlisted_origin_is_not_allowed_by_cors(self):
-        response = self.client.options(
-            "/perguntas",
-            headers={
-                "Origin": "https://unlisted.example",
-                "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "content-type",
-            },
+        origins = (
+            "https://unlisted.example",
+            "https://other-project-qvm5f7p98-flavio-hercules-projects.vercel.app",
+            "https://meu-portif-lio-oficial-qvm5f7p98-another-team.vercel.app",
+            "http://meu-portif-lio-oficial-qvm5f7p98-flavio-hercules-projects.vercel.app",
         )
+        for origin in origins:
+            with self.subTest(origin=origin):
+                response = self.client.options(
+                    "/perguntas",
+                    headers={
+                        "Origin": origin,
+                        "Access-Control-Request-Method": "POST",
+                        "Access-Control-Request-Headers": "content-type",
+                    },
+                )
 
-        self.assertIsNone(response.headers.get("Access-Control-Allow-Origin"))
+                self.assertIsNone(response.headers.get("Access-Control-Allow-Origin"))
 
     def test_authenticated_user_can_make_unlimited_interactions(self):
         responses = [self.post_question(self.user_id) for _ in range(5)]
 
         self.assertTrue(all(response.status_code == 200 for response in responses))
         self.assertEqual(self.generation_calls, 5)
+
+    def test_vercel_rewrite_reaches_the_existing_question_handler(self):
+        response = self.client.post(
+            "/api/index",
+            json={"pergunta": "Como começar a treinar?"},
+            headers={"Authorization": f"Bearer {self.user_id}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json, {"resposta": "Resposta de teste."})
+        self.assertEqual(self.generation_calls, 1)
+
+    def test_vercel_rewrite_reaches_the_existing_access_handler(self):
+        response = self.client.get(
+            "/api/index",
+            headers={"Authorization": f"Bearer {self.user_id}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["available"])
+        self.assertFalse(response.json["requires_subscription"])
 
     def test_simultaneous_interactions_are_allowed(self):
         self.generation_started = threading.Event()

@@ -13,13 +13,8 @@ export class ArtemisApiError extends Error {
 
 function getApiBaseUrl() {
   const configuredUrl = import.meta.env.VITE_ARTEMIS_API_URL?.trim();
-  if (configuredUrl) return configuredUrl.replace(/\/+$/, '');
-  if (import.meta.env.DEV) return 'http://localhost:5000';
-
-  throw new ArtemisApiError(
-    'A URL da API da Artemis não está configurada. Defina VITE_ARTEMIS_API_URL para este ambiente.',
-    'configuration_error',
-  );
+  if (!import.meta.env.DEV) return '';
+  return (configuredUrl || 'http://localhost:5000').replace(/\/+$/, '');
 }
 
 async function authenticatedHeaders() {
