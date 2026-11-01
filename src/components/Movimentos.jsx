@@ -4,6 +4,7 @@ import Navbar from './Navbar';
 import { supabase } from '../lib/supabase';
 import { findExerciseByName } from '../services/aiWorkoutStorage';
 import { notifyWorkoutCompleted } from '../services/notifications';
+import ExerciseVideo from './ExerciseVideo';
 
 function currentTimestamp() {
   return new Date().toISOString();
@@ -210,19 +211,23 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
   const renderExerciseCard = (exercise) => (
     <article key={exercise.id} className="movement-exercise-card" style={styles.exerciseCard}>
       <div style={styles.exerciseMedia}>
-        {exercise.video_url ? (
-          <video controls playsInline preload="metadata" poster={exercise.demo_image_url || undefined} style={styles.exerciseVideo} aria-label={`Demonstração de ${exercise.name}`}>
-            <source src={exercise.video_url} />
-            Seu navegador não suporta vídeos HTML5.
-          </video>
-        ) : exercise.demo_image_url ? (
-          <img src={exercise.demo_image_url} alt={`Demonstração de ${exercise.name}`} loading="lazy" style={styles.exerciseImage} />
-        ) : (
-          <div style={styles.exerciseArtwork} aria-label="Vídeo de demonstração ainda não cadastrado">
-            <span aria-hidden="true">▶</span>
-            <span>Vídeo de demonstração</span>
-          </div>
-        )}
+        <ExerciseVideo
+          exerciseName={exercise.name}
+          style={styles.exerciseVideoFrame}
+          fallback={exercise.video_url ? (
+            <video controls playsInline preload="metadata" poster={exercise.demo_image_url || undefined} style={styles.exerciseVideo} aria-label={`Demonstração de ${exercise.name}`}>
+              <source src={exercise.video_url} />
+              Seu navegador não suporta vídeos HTML5.
+            </video>
+          ) : exercise.demo_image_url ? (
+            <img src={exercise.demo_image_url} alt={`Demonstração de ${exercise.name}`} loading="lazy" style={styles.exerciseImage} />
+          ) : (
+            <div style={styles.exerciseArtwork} aria-label="Vídeo de demonstração ainda não cadastrado">
+              <span aria-hidden="true">▶</span>
+              <span>Vídeo de demonstração</span>
+            </div>
+          )}
+        />
       </div>
       <div style={styles.exerciseCardContent}>
         <span style={styles.exerciseCategory}>{exercise.category || 'Movimento'}</span>
@@ -633,14 +638,18 @@ export default function Movimentos({ userId, onOpenNotif, onOpenConfig }) {
         <div className="safe-overlay" role="presentation" onClick={closeExerciseDialog} style={styles.modalBackdrop}>
           <section role="dialog" aria-modal="true" aria-labelledby="exercise-dialog-title" onClick={(event) => event.stopPropagation()} style={styles.exerciseDialog}>
             <button type="button" aria-label="Fechar detalhes" onClick={closeExerciseDialog} style={styles.closeDialogButton}>×</button>
-            {displayedExercise.video_url ? (
-              <video controls autoPlay playsInline preload="auto" poster={displayedExercise.demo_image_url || undefined} style={styles.dialogImage} aria-label={`Demonstração de ${displayedExercise.name}`}>
-                <source src={displayedExercise.video_url} />
-                Seu navegador não suporta vídeos HTML5.
-              </video>
-            ) : displayedExercise.demo_image_url ? (
-              <img src={displayedExercise.demo_image_url} alt={displayedExercise.name} style={styles.dialogImage} />
-            ) : null}
+            <ExerciseVideo
+              exerciseName={displayedExercise.name}
+              style={styles.dialogVideoFrame}
+              fallback={displayedExercise.video_url ? (
+                <video controls autoPlay playsInline preload="auto" poster={displayedExercise.demo_image_url || undefined} style={styles.dialogImage} aria-label={`Demonstração de ${displayedExercise.name}`}>
+                  <source src={displayedExercise.video_url} />
+                  Seu navegador não suporta vídeos HTML5.
+                </video>
+              ) : displayedExercise.demo_image_url ? (
+                <img src={displayedExercise.demo_image_url} alt={displayedExercise.name} style={styles.dialogImage} />
+              ) : null}
+            />
             <p style={styles.dialogEyebrow}>{displayedExercise.category}{displayedExercise.muscle_group ? ` · ${displayedExercise.muscle_group}` : ''}</p>
             <h2 id="exercise-dialog-title" style={styles.dialogTitle}>{displayedExercise.name}</h2>
             {displayedExercise.description && <p style={styles.dialogDescription}>{displayedExercise.description}</p>}
@@ -1074,6 +1083,9 @@ const styles = {
     objectFit: 'cover',
     backgroundColor: '#04060b'
   },
+  exerciseVideoFrame: {
+    display: 'block',
+  },
   exerciseImage: {
     width: '100%',
     height: '100%',
@@ -1282,6 +1294,12 @@ const styles = {
     maxHeight: '260px',
     objectFit: 'cover',
     marginBottom: '16px'
+  },
+  dialogVideoFrame: {
+    width: '100%',
+    aspectRatio: '16 / 9',
+    maxHeight: '260px',
+    marginBottom: '16px',
   },
   dialogEyebrow: {
     color: '#67e8f9',
